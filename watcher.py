@@ -90,6 +90,24 @@ def extract_pc_product_links(html: str, max_links: int = 30) -> List[str]:
             break
     return out
 
+def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
+    headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    for attempt in range(retries + 1):
+        start = time.time()
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+            elapsed_ms = int((time.time() - start) * 1000)
+            return r.text, r.status_code, elapsed_ms
+        except Exception as e:
+            elapsed_ms = int((time.time() - start) * 1000)
+            print(f"[warn] fetch attempt {attempt+1}/{retries+1} failed for {url}: {e}", file=sys.stderr)
+            time.sleep(1.0)
+    return None, None, None
+
 def safe_main():
     # env always present in Actions; we won’t hard-exit if missing
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -172,7 +190,7 @@ def safe_main():
             continue
             
         # Debug (optional): show we actually got content and what URL we checked
-            print(f"[debug] {t.name}: fetched {len(html)} bytes from {t.url}")
+        print(f"[debug] {t.name}: fetched {len(html)} bytes from {t.url}")
 
         # 2) Traffic spike heuristics (optional early heads-up)
         TRAFFIC_LATENCY_MS = 2500  # adjust if you like
