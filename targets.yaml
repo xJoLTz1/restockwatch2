@@ -55,3 +55,26 @@ targets:
       pattern_in_stock: "(Add\\s*to\\s*cart|Ship\\s*it|Deliver\\s*it|Pickup\\s*here|Same\\s*Day\\s*Delivery)"
       # Considered OUT OF STOCK if any of these appear:
       pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Temporarily\\s*out\\s*of\\s*stock|Check\\s*back\\s*soon|Not\\s*available)"
+
+  - name: "PC – ANY ETB in stock (category)"
+  url: "https://www.pokemoncenter.com/category/elite-trainer-box"
+  parse:
+    mode: "contains"
+    in_stock_contains: ["Add to Cart","Add to Bag"]
+    out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+- name: "PC – ANY Booster Packs in stock (category)"
+  url: "https://www.pokemoncenter.com/category/booster-packs"
+  parse:
+    mode: "contains"
+    in_stock_contains: ["Add to Cart","Add to Bag"]
+    out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+- name: "PC – ANY TCG Cards in stock (category)"
+  url: "https://www.pokemoncenter.com/category/tcg-cards"
+  parse:
+    mode: "contains"
+    in_stock_contains: ["Add to Cart","Add to Bag"]
+    out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+  
