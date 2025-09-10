@@ -136,7 +136,7 @@ def safe_main():
                 )
                 if p_html is None:
                     continue
-                     state = detect_stock(p_html, t)  # reuse this target's parse rules
+                state = detect_stock(p_html, t)  # reuse this target's parse rules
                 stock_key = f"[{t.name}] {purl}"  # unique per product URL under this category
                 existing_stock = find_issue_by_key(open_issues, stock_key)
 
