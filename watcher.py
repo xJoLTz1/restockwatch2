@@ -21,6 +21,7 @@ class Target:
     url: str
     parse: TargetParse
     priority_keywords: List[str] = field(default_factory=list)
+    expand: Optional[str] = None 
 
 @dataclass
 class Config:
@@ -59,7 +60,8 @@ def load_config(path: str) -> Config:
             name=t.get("name", "Unnamed"),
             url=t.get("url", ""),
             parse=tp,
-            priority_keywords=t.get("priority_keywords") or []
+            priority_keywords=t.get("priority_keywords") or [],
+            expand=t.get("expand")
         ))
     return Config(
         poll_interval_seconds=raw.get("poll_interval_seconds", 120),
@@ -71,6 +73,23 @@ def load_config(path: str) -> Config:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
     )
+
+def extract_pc_product_links(html: str, max_links: int = 30) -> List[str]:
+    """
+    Scrape Pokémon Center product links from a category page without extra deps.
+    Looks for href="/product/....". Returns absolute URLs, de-duped.
+    """
+    links = re.findall(r'href="(/product/[^"]+)"', html)
+    out, seen = [], set()
+    for href in links:
+        url = "https://www.pokemoncenter.com" + href.split("?")[0]
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+        if len(out) >= max_links:
+            break
+    return out
+
 def safe_main():
     # env always present in Actions; we won’t hard-exit if missing
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -93,7 +112,54 @@ def safe_main():
         if not t.url:
             print(f"[warn] Skipping target with empty URL: {t.name}", file=sys.stderr)
             continue
+        # --- NEW: category expansion for Pokémon Center ---
+        if (t.expand or "").lower() == "pc_category":
+            # Fetch category page once
+            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
+                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+            )
+            if cat_html is None:
+                print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
+                continue
 
+            product_urls = extract_pc_product_links(cat_html, max_links=30)
+            if not product_urls:
+                print(f"[info] No product links found in category: {t.name}")
+                continue
+
+            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
+
+            # Check each product page using the SAME parse rules from this target
+            for purl in product_urls:
+                p_html, p_status, p_elapsed = fetch_html_with_retries(
+                    purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+                )
+                if p_html is None:
+                    continue
+                     state = detect_stock(p_html, t)  # reuse this target's parse rules
+                stock_key = f"[{t.name}] {purl}"  # unique per product URL under this category
+                existing_stock = find_issue_by_key(open_issues, stock_key)
+
+                if state is True:
+                    title = f"✅ IN STOCK {stock_key}"
+                    body = f"Appears IN STOCK.\n\nURL: {purl}\n\n_(Auto by RestockWatch)_"
+                    if not existing_stock:
+                        create_issue(repo, token, title, body, labels=[label])
+                        maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, purl, purl)
+                        maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, purl, purl)
+                        print(f"[alert] opened issue for {purl}")
+                elif state is False:
+                    if existing_stock:
+                        close_issue(repo, token, existing_stock["number"])
+                        print(f"[info] closed issue for {purl} (OOS)")
+                else:
+                    # Unknown—do nothing
+                    pass
+
+            # Done with this category target; move to next target
+            continue
+        # --- END NEW ---
+                    
         # 1) Fetch (returns body, status code, and elapsed ms)
         html, status, elapsed_ms = fetch_html_with_retries(
             t.url,
