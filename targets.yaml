@@ -18,3 +18,31 @@ targets:
       mode: "regex"
       pattern_in_stock: "(Add\\s*to\\s*cart|Pickup\\s*here)"
       pattern_out_of_stock: "(Sold\\s*out|Unavailable)"
+
+  - name: "PC – Obsidian Flames ETB"
+    url: "https://www.pokemoncenter.com/product/186-85392/pokemon-tcg-scarlet-and-violet-obsidian-flames-pokemon-center-elite-trainer-box"
+    parse:
+      mode: "contains"
+      in_stock_contains: ["Add to Cart","Add to Bag"]
+      out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+  - name: "PC – Prismatic Evolutions Binder Collection"
+    url: "https://www.pokemoncenter.com/product/10-10023-101/pokemon-tcg-scarlet-and-violet-prismatic-evolutions-binder-collection"
+    parse:
+      mode: "contains"
+      in_stock_contains: ["Add to Cart","Add to Bag"]
+      out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+   - name: "PC – Phantasmal Flames Booster Bundle"
+    url: "https://www.pokemoncenter.com/product/10-10191-109/"
+    parse:
+      mode: "contains"
+      in_stock_contains: ["Add to Cart","Add to Bag"]
+      out_of_stock_contains: ["Sold Out","Out of Stock"]
+      
+  - name: "PC – Temporal Forces Booster Box"
+    url: "https://www.pokemoncenter.com/product/10-10190-119/"
+    parse:
+      mode: "contains"
+      in_stock_contains: ["Add to Cart","Add to Bag"]
+      out_of_stock_contains: ["Sold Out","Out of Stock"]
