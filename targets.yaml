@@ -70,60 +70,60 @@ targets:
       # Considered OUT OF STOCK if any of these appear:
       pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Temporarily\\s*out\\s*of\\s*stock|Check\\s*back\\s*soon|Not\\s*available)"
 
- - name: "PC – ANY ETB in stock (category)"
-  url: "https://www.pokemoncenter.com/category/elite-trainer-box"
-  expand: "pc_category" 
-  parse:
-    mode: "regex"
+  - name: "PC – ANY ETB in stock (category)"
+    url: "https://www.pokemoncenter.com/category/elite-trainer-box"
+    expand: "pc_category" 
+    parse:
+      mode: "regex"
     # Any of these indicate something is purchasable on the page:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
 
- - name: "PC – ANY Booster Packs in stock (category)"
-  url: "https://www.pokemoncenter.com/category/booster-packs"
-  expand: "pc_category" 
-  parse:
-    mode: "regex"
+  - name: "PC – ANY Booster Packs in stock (category)"
+    url: "https://www.pokemoncenter.com/category/booster-packs"
+    expand: "pc_category" 
+    parse:
+      mode: "regex"
     # Any of these indicate something is purchasable on the page:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
 
- - name: "PC – ANY TCG Cards in stock (category)"
-  url: "https://www.pokemoncenter.com/category/tcg-cards"
-  expand: "pc_category" 
-  parse:
-    mode: "regex"
+  - name: "PC – ANY TCG Cards in stock (category)"
+    url: "https://www.pokemoncenter.com/category/tcg-cards"
+    expand: "pc_category" 
+    parse:
+      mode: "regex"
     # Any of these indicate something is purchasable on the page:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
 
- - name: "PC – ANY Tins in stock (category)"
-  url: "https://www.pokemoncenter.com/category/tcg-tins"
-  expand: "pc_category" 
-  parse:
-    mode: "regex"
+   - name: "PC – ANY Tins in stock (category)"
+     url: "https://www.pokemoncenter.com/category/tcg-tins"
+     expand: "pc_category" 
+     parse:
+       mode: "regex"
     # Any of these indicate something is purchasable on the page:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
 
-- name: "PC – ANY Boxed Sets in stock (category)"
-  url: "https://www.pokemoncenter.com/category/boxed-sets"
-  expand: "pc_category" 
-  parse:
-    mode: "regex"
+  - name: "PC – ANY Boxed Sets in stock (category)"
+    url: "https://www.pokemoncenter.com/category/boxed-sets"
+    expand: "pc_category" 
+    parse:
+      mode: "regex"
     # Any of these indicate something is purchasable on the page:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
 
-- name: "TEST – Always match"
-  url: "https://www.pokemoncenter.com/"
-  parse:
-    mode: "regex"
+  - name: "TEST – Always match"
+    url: "https://www.pokemoncenter.com/"
+    parse:
+      mode: "regex"
     pattern_in_stock: "."
     pattern_out_of_stock: ""
 
