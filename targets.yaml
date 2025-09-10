@@ -124,6 +124,6 @@ targets:
   url: "https://www.pokemoncenter.com/"
   parse:
     mode: "regex"
-    pattern_in_stock: "C"
+    pattern_in_stock: "."
     pattern_out_of_stock: ""
 
