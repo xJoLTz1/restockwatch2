@@ -72,181 +72,71 @@ def load_config(path: str) -> Config:
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
     )
 
-def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
-    headers = {
-        "User-Agent": ua,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
-    for attempt in range(retries + 1):
-        start = time.time()
-        try:
-            r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            elapsed_ms = int((time.time() - start) * 1000)
-            # Don't raise here; we want to see 429/503 bodies & status
-            text = r.text if hasattr(r, "text") else ""
-            return text, r.status_code, elapsed_ms
-        except Exception as e:
-            elapsed_ms = int((time.time() - start) * 1000)
-            print(f"[warn] fetch attempt {attempt+1}/{retries+1} failed for {url}: {e}", file=sys.stderr)
-            time.sleep(1.0)
-    return None, None, None
-    
-def detect_stock(html: str, t: Target) -> Optional[bool]:
-    mode = (t.parse.mode or "contains").lower()
-    low = html.lower()
-    if mode == "regex":
-        if t.parse.pattern_in_stock and re.search(t.parse.pattern_in_stock, html, flags=re.I):
-            return True
-        if t.parse.pattern_out_of_stock and re.search(t.parse.pattern_out_of_stock, html, flags=re.I):
-            return False
-        return None
-    # default "contains"
-    if t.parse.in_stock_contains:
-        if any(s.lower() in low for s in t.parse.in_stock_contains):
-            return True
-    if t.parse.out_of_stock_contains:
-        if any(s.lower() in low for s in t.parse.out_of_stock_contains):
-            return False
-    return None
-
-def gh_call(method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Any]:
-    if not token:
-        return None
-    h = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-    url = GITHUB_API + path
-    try:
-        if method == "GET":
-            r = requests.get(url, headers=h, timeout=20)
-        elif method == "POST":
-            r = requests.post(url, headers=h, json=payload, timeout=20)
-        elif method == "PATCH":
-            r = requests.patch(url, headers=h, json=payload, timeout=20)
-        else:
-            return None
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print(f"[warn] GitHub API {method} {path} failed: {e}", file=sys.stderr)
-        return None
-
-def list_open_issues(repo: str, token: str, label: str) -> List[Dict[str, Any]]:
-    data = gh_call("GET", f"/repos/{repo}/issues?state=open&labels={label}", token) or []
-    return data
-
-def find_issue_by_key(open_issues: List[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
-    for i in open_issues:
-        if key in (i.get("title") or ""):
-            return i
-    return None
-
-def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]):
-    gh_call("POST", f"/repos/{repo}/issues", token, {"title": title, "body": body, "labels": labels})
-
-def close_issue(repo: str, token: str, issue_number: int):
-    gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
-
-def maybe_send_pushover(token: Optional[str], user: Optional[str], title: str, message: str, url: Optional[str] = None):
-    if not token or not user:
-        return
-    data = {"token": token, "user": user, "title": title, "message": message}
-    if url: data["url"] = url
-    try:
-        requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
-    except Exception as e:
-        print(f"[warn] pushover failed: {e}", file=sys.stderr)
-
-def maybe_send_telegram(bot_token: Optional[str], chat_id: Optional[str], title: str, message: str, url: Optional[str] = None):
-    if not bot_token or not chat_id:
-        return
-    text = f"*{title}*\n{message}"
-    if url: text += f"\n{url}"
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=15
-        )
-    except Exception as e:
-        print(f"[warn] telegram failed: {e}", file=sys.stderr)
-
-def safe_main():
-    # env always present in Actions; we won’t hard-exit if missing
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    token = os.environ.get("GITHUB_TOKEN", "")
-
-    cfg = load_config("targets.yaml")
-    if not cfg.targets:
-        print("[warn] No targets found in targets.yaml. Nothing to check this run.", file=sys.stderr)
-        return
-
-    label = "restockwatch"
-
-    # Best-effort: ensure label exists
-    _ = gh_call("POST", f"/repos/{repo}/labels", token,
-                {"name": label, "color": "0E8A16", "description": "Auto-created by restock watcher"})
-
-    open_issues = list_open_issues(repo, token, label=label)
-
     for t in cfg.targets:
         if not t.url:
             print(f"[warn] Skipping target with empty URL: {t.name}", file=sys.stderr)
             continue
 
-        html = fetch_html_with_retries(t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2)
+        # 1) Fetch (returns body, status code, and elapsed ms)
+        html, status, elapsed_ms = fetch_html_with_retries(
+            t.url,
+            timeout=cfg.timeout_seconds,
+            ua=cfg.user_agent,
+            retries=2
+        )
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
             continue
-            
-# === Traffic spike heuristics ===
-TRAFFIC_LATENCY_MS = 2500  # 2.5s threshold; adjust if needed
-HIGH_TRAFFIC_STATUSES = {429, 503}
 
-if (status in HIGH_TRAFFIC_STATUSES) or (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS):
-    key = f"[TRAFFIC] {t.name}"
-    title = f"⚠️ High traffic/limited availability detected {key}"
-    body = (f"Detected potential high traffic on: {t.name}\n\n"
-            f"URL: {t.url}\n"
-            f"HTTP status: {status}\n"
-            f"Latency: {elapsed_ms} ms\n\n"
-            f"_(Auto by RestockWatch)_")
+        # 2) Traffic spike heuristics (optional early heads-up)
+        TRAFFIC_LATENCY_MS = 2500  # adjust if you like
+        HIGH_TRAFFIC_STATUSES = {429, 503}
 
-    open_issues = list_open_issues(repo, token, label=label)
-    existing = find_issue_by_key(open_issues, key)
-    if not existing:
-        create_issue(repo, token, title, body, labels=[label])
-        maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, t.url, t.url)
-        maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, t.url, t.url)
-    else:
-        print(f"[info] traffic issue already open for {t.name}")
-        
+        if (status in HIGH_TRAFFIC_STATUSES) or (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS):
+            traffic_key = f"[TRAFFIC] {t.name}"
+            traffic_title = f"⚠️ High traffic/limited availability detected {traffic_key}"
+            traffic_body = (
+                f"Detected potential high traffic on: {t.name}\n\n"
+                f"URL: {t.url}\n"
+                f"HTTP status: {status}\n"
+                f"Latency: {elapsed_ms} ms\n\n"
+                f"_(Auto by RestockWatch)_"
+            )
+            existing_traffic = find_issue_by_key(open_issues, traffic_key)
+            if not existing_traffic:
+                create_issue(repo, token, traffic_title, traffic_body, labels=[label])
+                maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, traffic_title, t.url, t.url)
+                maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, traffic_title, t.url, t.url)
+                print(f"[info] opened traffic issue for {t.name}")
+            else:
+                print(f"[info] traffic issue already open for {t.name}")
+
+        # 3) Normal stock detection
         state = detect_stock(html, t)
-        key = f"[{t.name}]"
-        existing = find_issue_by_key(open_issues, key)
+        stock_key = f"[{t.name}]"
+        existing_stock = find_issue_by_key(open_issues, stock_key)
 
         if state is True:
-            title = f"✅ IN STOCK {key}"
+            title = f"✅ IN STOCK {stock_key}"
             body = f"{t.name} appears to be IN STOCK.\n\nURL: {t.url}\n\n_(Auto by RestockWatch)_"
-            if not existing:
+            if not existing_stock:
                 create_issue(repo, token, title, body, labels=[label])
                 maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, t.url, t.url)
                 maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, t.url, t.url)
                 print(f"[alert] opened issue for {t.name}")
             else:
                 print(f"[info] already open issue for {t.name}")
+
         elif state is False:
-            if existing:
-                close_issue(repo, token, existing["number"])
+            if existing_stock:
+                close_issue(repo, token, existing_stock["number"])
                 print(f"[info] closed issue for {t.name} (OOS)")
             else:
                 print(f"[info] OOS and no open issue for {t.name}")
+
         else:
             print(f"[info] Unknown state for {t.name} (no action)")
 
-if __name__ == "__main__":
-    try:
-        safe_main()
-    except Exception as e:
         # Never fail the job hard; log the error instead
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
 
