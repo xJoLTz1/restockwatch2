@@ -72,22 +72,26 @@ def load_config(path: str) -> Config:
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
     )
 
-def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2) -> Optional[str]:
+def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
     headers = {
         "User-Agent": ua,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
     for attempt in range(retries + 1):
+        start = time.time()
         try:
             r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-            r.raise_for_status()
-            return r.text
+            elapsed_ms = int((time.time() - start) * 1000)
+            # Don't raise here; we want to see 429/503 bodies & status
+            text = r.text if hasattr(r, "text") else ""
+            return text, r.status_code, elapsed_ms
         except Exception as e:
+            elapsed_ms = int((time.time() - start) * 1000)
             print(f"[warn] fetch attempt {attempt+1}/{retries+1} failed for {url}: {e}", file=sys.stderr)
             time.sleep(1.0)
-    return None
-
+    return None, None, None
+    
 def detect_stock(html: str, t: Target) -> Optional[bool]:
     mode = (t.parse.mode or "contains").lower()
     low = html.lower()
@@ -193,7 +197,29 @@ def safe_main():
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
             continue
+            
+# === Traffic spike heuristics ===
+TRAFFIC_LATENCY_MS = 2500  # 2.5s threshold; adjust if needed
+HIGH_TRAFFIC_STATUSES = {429, 503}
 
+if (status in HIGH_TRAFFIC_STATUSES) or (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS):
+    key = f"[TRAFFIC] {t.name}"
+    title = f"⚠️ High traffic/limited availability detected {key}"
+    body = (f"Detected potential high traffic on: {t.name}\n\n"
+            f"URL: {t.url}\n"
+            f"HTTP status: {status}\n"
+            f"Latency: {elapsed_ms} ms\n\n"
+            f"_(Auto by RestockWatch)_")
+
+    open_issues = list_open_issues(repo, token, label=label)
+    existing = find_issue_by_key(open_issues, key)
+    if not existing:
+        create_issue(repo, token, title, body, labels=[label])
+        maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, t.url, t.url)
+        maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, t.url, t.url)
+    else:
+        print(f"[info] traffic issue already open for {t.name}")
+        
         state = detect_stock(html, t)
         key = f"[{t.name}]"
         existing = find_issue_by_key(open_issues, key)
