@@ -104,6 +104,9 @@ def safe_main():
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
             continue
+            
+        # Debug (optional): show we actually got content and what URL we checked
+            print(f"[debug] {t.name}: fetched {len(html)} bytes from {t.url}")
 
         # 2) Traffic spike heuristics (optional early heads-up)
         TRAFFIC_LATENCY_MS = 2500  # adjust if you like
