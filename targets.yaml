@@ -118,3 +118,17 @@ targets:
     mode: "regex"
     pattern_in_stock: "."
     pattern_out_of_stock: ""
+
+- name: Smoke test: create issue via API
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    REPO: ${{ github.repository }}
+  run: |
+    set -e
+    code=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      -d '{"title":"🔧 Actions smoke test","body":"If you see this, issue creation works."}' \
+      https://api.github.com/repos/$REPO/issues)
+    echo "HTTP $code"
+    cat /tmp/resp.json
