@@ -2,7 +2,7 @@ name: Restock Watch
 
 on:
   schedule:
-    - cron: "*/3 * * * *"   # every 3 minutes
+    - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch: {}
 
 jobs:
