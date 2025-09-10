@@ -1,0 +1,20 @@
+# Edit this file in GitHub's web UI to add your real targets.
+# No secrets needed: you'll get emails from GitHub when issues are created!
+poll_interval_seconds: 120
+timeout_seconds: 20
+user_agent: "RestockWatch-GHA/1.0"
+
+targets:
+  - name: "Pokémon Center – Example ETB"
+    url: "https://www.pokemoncenter.com/sample-product-url"
+    parse:
+      mode: "contains"
+      in_stock_contains: ["Add to Cart","Add to Bag"]
+      out_of_stock_contains: ["Out of Stock","Sold Out"]
+
+  - name: "Target – Example Bundle"
+    url: "https://www.target.com/p/sample"
+    parse:
+      mode: "regex"
+      pattern_in_stock: "(Add\\s*to\\s*cart|Pickup\\s*here)"
+      pattern_out_of_stock: "(Sold\\s*out|Unavailable)"
