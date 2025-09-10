@@ -111,3 +111,10 @@ targets:
     pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
     # Leave out-of-stock empty here; we just need a positive hit to open an Issue.
     pattern_out_of_stock: ""
+
+- name: "TEST – Always match"
+  url: "https://www.pokemoncenter.com/"
+  parse:
+    mode: "regex"
+    pattern_in_stock: "."
+    pattern_out_of_stock: ""
