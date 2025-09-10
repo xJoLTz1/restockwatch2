@@ -40,7 +40,7 @@ targets:
       in_stock_contains: ["Add to Cart","Add to Bag"]
       out_of_stock_contains: ["Sold Out","Out of Stock"]
       
-  - name: "PC – Temporal Forces Booster Box"
+  - name: "PC – Phantasmal Flames Booster Box"
     url: "https://www.pokemoncenter.com/product/10-10190-119/"
     parse:
       mode: "contains"
