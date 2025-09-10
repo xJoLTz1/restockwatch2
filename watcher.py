@@ -71,6 +71,23 @@ def load_config(path: str) -> Config:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
     )
+def safe_main():
+    # env always present in Actions; we won’t hard-exit if missing
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    token = os.environ.get("GITHUB_TOKEN", "")
+
+    cfg = load_config("targets.yaml")
+    if not cfg.targets:
+        print("[warn] No targets found in targets.yaml. Nothing to check this run.", file=sys.stderr)
+        return
+
+    label = "restockwatch"
+
+    # Best-effort: ensure label exists
+    _ = gh_call("POST", f"/repos/{repo}/labels", token,
+                {"name": label, "color": "0E8A16", "description": "Auto-created by restock watcher"})
+
+    open_issues = list_open_issues(repo, token, label=label)
 
     for t in cfg.targets:
         if not t.url:
@@ -137,6 +154,9 @@ def load_config(path: str) -> Config:
         else:
             print(f"[info] Unknown state for {t.name} (no action)")
 
+if __name__ == "__main__":
+    try:
+        safe_main()
+    except Exception as e:
         # Never fail the job hard; log the error instead
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
-
