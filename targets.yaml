@@ -77,4 +77,9 @@ targets:
     in_stock_contains: ["Add to Cart","Add to Bag"]
     out_of_stock_contains: ["Sold Out","Out of Stock"]
 
-  
+ - name: "PC – ANY Tins in stock (category)"
+  url: "https://www.pokemoncenter.com/category/tcg-tins"
+  parse:
+    mode: "contains"
+    in_stock_contains: ["Add to Cart","Add to Bag"]
+    out_of_stock_contains: ["Sold Out","Out of Stock"]
