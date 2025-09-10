@@ -1,5 +1,13 @@
-# Edit this file in GitHub's web UI to add your real targets.
-# No secrets needed: you'll get emails from GitHub when issues are created!
+name: Restock Watch
+permissions:
+  contents: read
+  issues: write
+
+on:
+  schedule:
+    - cron: "* * * * *"
+  workflow_dispatch: {}
+
 jobs:
   watch:
     runs-on: ubuntu-latest
