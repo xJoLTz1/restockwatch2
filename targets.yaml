@@ -5,15 +5,15 @@ timeout_seconds: 20
 user_agent: "RestockWatch-GHA/1.0"
 
 targets:
-  - name: "Pokémon Center – Example ETB"
-    url: "https://www.pokemoncenter.com/sample-product-url"
+  - name: "Pokémon Center – Phantasmal Flames Elite Trainer Box"
+    url: "https://www.pokemoncenter.com/product/10-10186-109/"
     parse:
       mode: "contains"
       in_stock_contains: ["Add to Cart","Add to Bag"]
       out_of_stock_contains: ["Out of Stock","Sold Out"]
 
-  - name: "Target – Example Bundle"
-    url: "https://www.target.com/p/sample"
+  - name: "Target – Twilight Masquerade Elite Trainer Bundle"
+    url: "https://www.target.com/p/blaze/-/A-91619960?clkid=e16ce7a3N89d711f0b1e7c13254943ab0&cpng=&TCID=AFL-e16ce7a3N89d711f0b1e7c13254943ab0&lnm=81938&afid=Mavely&ref=tgt_adv_xasd0002"
     parse:
       mode: "regex"
       pattern_in_stock: "(Add\\s*to\\s*cart|Pickup\\s*here)"
