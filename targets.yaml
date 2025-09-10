@@ -46,3 +46,12 @@ targets:
       mode: "contains"
       in_stock_contains: ["Add to Cart","Add to Bag"]
       out_of_stock_contains: ["Sold Out","Out of Stock"]
+
+   - name: "Target – Destined Rivals Booster Bundle"
+    url: "https://www.target.com/p/pok%C3%A9mon-trading-card-game-scarlet-38-violet-8212-destined-rivals-booster-bundle/-/A-94300067"
+    parse:
+      mode: "regex"
+      # Considered IN STOCK if any of these appear in the HTML:
+      pattern_in_stock: "(Add\\s*to\\s*cart|Ship\\s*it|Deliver\\s*it|Pickup\\s*here|Same\\s*Day\\s*Delivery)"
+      # Considered OUT OF STOCK if any of these appear:
+      pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Temporarily\\s*out\\s*of\\s*stock|Check\\s*back\\s*soon|Not\\s*available)"
