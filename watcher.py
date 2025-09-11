@@ -295,8 +295,8 @@ def safe_main():
             print(f"[info] bot-wall issue already open for {t.name}")
         # Skip parsing links this run
         continue
-
-            product_urls = extract_pc_product_links(cat_html, max_links=30)
+           
+           product_urls = extract_pc_product_links(cat_html, max_links=30)
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
                 continue
