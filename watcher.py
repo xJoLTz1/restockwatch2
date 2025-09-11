@@ -289,6 +289,20 @@ def safe_main():
 
             print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
+            if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
+   re.search(r'/vice-come-[^"]+\\.js', cat_html, flags=re.I):
+    traffic_key = f"[PC BOT-WALL] {t.name}"
+    title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
+    body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
+    existing = find_issue_by_key(open_issues, traffic_key)
+    if not existing:
+        create_issue(repo, token, title, body, labels=[label])
+        print(f"[info] opened bot-wall issue for {t.name}")
+    else:
+        print(f"[info] bot-wall issue already open for {t.name}")
+    # skip parsing links this run
+    continue
+
             # Check each product page using the SAME parse rules from this target
             for purl in product_urls:
                 p_html, p_status, p_elapsed = fetch_html_with_retries(
