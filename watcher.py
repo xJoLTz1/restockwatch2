@@ -108,6 +108,46 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             time.sleep(1.0)
     return None, None, None
 
+# --- GitHub API helpers (required) ---
+def gh_call(method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    if not token:
+        print("[warn] No token provided to gh_call.", file=sys.stderr)
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    url = GITHUB_API + path
+    try:
+        if method == "GET":
+            r = requests.get(url, headers=headers, timeout=20)
+        elif method == "POST":
+            r = requests.post(url, headers=headers, json=payload, timeout=20)
+        elif method == "PATCH":
+            r = requests.patch(url, headers=headers, json=payload, timeout=20)
+        else:
+            return None
+        if r.status_code >= 400:
+            print(f"[warn] GitHub API {method} {path} -> {r.status_code} {r.text}", file=sys.stderr)
+            return None
+        return r.json()
+    except Exception as e:
+        print(f"[warn] GitHub API {method} {path} failed: {e}", file=sys.stderr)
+        return None
+
+def list_open_issues(repo: str, token: str, label: str) -> List[Dict[str, Any]]:
+    return gh_call("GET", f"/repos/{repo}/issues?state=open&labels={label}", token) or []
+
+def find_issue_by_key(open_issues: List[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+    for i in open_issues:
+        if key in (i.get("title") or ""):
+            return i
+    return None
+
+def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]):
+    gh_call("POST", f"/repos/{repo}/issues", token, {"title": title, "body": body, "labels": labels})
+
+def close_issue(repo: str, token: str, issue_number: int):
+    gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
+
+
 def safe_main():
     # env always present in Actions; we won’t hard-exit if missing
     repo = os.environ.get("GITHUB_REPOSITORY", "")
