@@ -5,10 +5,13 @@ user_agent: "RestockWatch-GHA/1.0"
 targets:
   - name: "Pokémon Center – Phantasmal Flames Elite Trainer Box"
     url: "https://www.pokemoncenter.com/product/10-10186-109/"
-    parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Out of Stock","Sold Out"]
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
+
 
   - name: "Target – Twilight Masquerade Elite Trainer Bundle"
     url: "https://www.target.com/p/blaze/-/A-91619960?clkid=e16ce7a3N89d711f0b1e7c13254943ab0&cpng=&TCID=AFL-e16ce7a3N89d711f0b1e7c13254943ab0&lnm=81938&afid=Mavely&ref=tgt_adv_xasd0002"
@@ -19,31 +22,39 @@ targets:
 
   - name: "PC – Obsidian Flames ETB"
     url: "https://www.pokemoncenter.com/product/186-85392/pokemon-tcg-scarlet-and-violet-obsidian-flames-pokemon-center-elite-trainer-box"
-    parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – Prismatic Evolutions Binder Collection"
     url: "https://www.pokemoncenter.com/product/10-10023-101/pokemon-tcg-scarlet-and-violet-prismatic-evolutions-binder-collection"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – Phantasmal Flames Booster Bundle"
     url: "https://www.pokemoncenter.com/product/10-10191-109/"
-    parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – Phantasmal Flames Booster Box"
     url: "https://www.pokemoncenter.com/product/10-10190-119/"
-    parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "Target – Destined Rivals Booster Bundle"
     url: "https://www.target.com/p/pok%C3%A9mon-trading-card-game-scarlet-38-violet-8212-destined-rivals-booster-bundle/-/A-94300067"
@@ -55,43 +66,53 @@ targets:
   - name: "PC – ANY ETB in stock (category)"
     url: "https://www.pokemoncenter.com/category/elite-trainer-box"
     expand: "pc_category"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
-      pattern_out_of_stock: ""
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – ANY Booster Packs in stock (category)"
     url: "https://www.pokemoncenter.com/category/booster-packs"
     expand: "pc_category"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
-      pattern_out_of_stock: ""
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – ANY TCG Cards in stock (category)"
     url: "https://www.pokemoncenter.com/category/tcg-cards"
     expand: "pc_category"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
-      pattern_out_of_stock: ""
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – ANY Tins in stock (category)"
     url: "https://www.pokemoncenter.com/category/tcg-tins"
     expand: "pc_category"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
-      pattern_out_of_stock: ""
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
   - name: "PC – ANY Boxed Sets in stock (category)"
     url: "https://www.pokemoncenter.com/category/boxed-sets"
     expand: "pc_category"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart)"
-      pattern_out_of_stock: ""
-
+parse:
+  mode: "regex"
+  # Positive cues (any one is fine)
+  pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
+  # Negative cues we must not see at the same time
+  pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
+  
   - name: "TEST – Always match"
     url: "https://www.pokemoncenter.com/"
     parse:
