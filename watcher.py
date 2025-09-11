@@ -148,23 +148,43 @@ def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
 
 def detect_stock(html: str, t: Target) -> Optional[bool]:
+    """Return True (in stock), False (OOS), or None (unknown).
+       Uses positive AND negative cues; includes schema.org availability.
+    """
     mode = (t.parse.mode or "contains").lower()
     low = html.lower()
 
+    # Strong structured signals (if present)
+    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I):
+        print(f"[debug] {t.name}: schema.org availability -> InStock")
+        return True
+    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html, flags=re.I):
+        print(f"[debug] {t.name}: schema.org availability -> OutOfStock")
+        return False
+
+    def contains_any(text: str, needles: List[str]) -> bool:
+        return any(n.lower() in text for n in (needles or []))
+
     if mode == "regex":
-        if t.parse.pattern_in_stock and re.search(t.parse.pattern_in_stock, html, flags=re.I):
+        pin = t.parse.pattern_in_stock
+        pout = t.parse.pattern_out_of_stock
+        has_in = bool(re.search(pin, html, flags=re.I)) if pin else False
+        has_out = bool(re.search(pout, html, flags=re.I)) if pout else False
+        print(f"[debug] {t.name}: regex has_in={has_in} has_out={has_out}")
+        if has_in and not has_out:
             return True
-        if t.parse.pattern_out_of_stock and re.search(t.parse.pattern_out_of_stock, html, flags=re.I):
+        if has_out and not has_in:
             return False
         return None
 
-    # default "contains"
-    if t.parse.in_stock_contains:
-        if any(s.lower() in low for s in t.parse.in_stock_contains):
-            return True
-    if t.parse.out_of_stock_contains:
-        if any(s.lower() in low for s in t.parse.out_of_stock_contains):
-            return False
+    # mode == "contains"
+    has_in = contains_any(low, t.parse.in_stock_contains)
+    has_out = contains_any(low, t.parse.out_of_stock_contains)
+    print(f"[debug] {t.name}: contains has_in={has_in} has_out={has_out}")
+    if has_in and not has_out:
+        return True
+    if has_out and not has_in:
+        return False
     return None
 
 def maybe_send_pushover(token: Optional[str], user: Optional[str], title: str, message: str, url: Optional[str] = None):
