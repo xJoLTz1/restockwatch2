@@ -74,21 +74,31 @@ def load_config(path: str) -> Config:
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID"),
     )
 
-def extract_pc_product_links(html: str, max_links: int = 30) -> List[str]:
+def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
     """
-    Scrape Pokémon Center product links from a category page without extra deps.
-    Looks for href="/product/....". Returns absolute URLs, de-duped.
+    Scrape Pokémon Center product links from a category page.
+    Handles href, data-pdp-url, and JSON-embedded pdpUrl/url fields.
     """
-    links = re.findall(r'href="(/product/[^"]+)"', html)
-    out, seen = [], set()
-    for href in links:
-        url = "https://www.pokemoncenter.com" + href.split("?")[0]
-        if url not in seen:
-            seen.add(url)
-            out.append(url)
-        if len(out) >= max_links:
-            break
-    return out
+    patterns = [
+        r'href=[\'"](/product/[^\'"]+)[\'"]',                     # <a href="/product/...">
+        r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',             # data-pdp-url="/product/..."
+        r'"pdpUrl"\s*:\s*"[ ]*(/product/[^"]+)"',                 # "pdpUrl": "/product/..."
+        r'"url"\s*:\s*"[ ]*(/product/[^"]+)"',                    # "url": "/product/..."
+    ]
+
+    found: List[str] = []
+    seen = set()
+    for pat in patterns:
+        for m in re.findall(pat, html, flags=re.I):
+            path = m.split("?")[0]  # normalize
+            url = "https://www.pokemoncenter.com" + path
+            if url not in seen:
+                seen.add(url)
+                found.append(url)
+                if len(found) >= max_links:
+                    return found
+
+    return found
 
 def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
     headers = {
@@ -148,34 +158,44 @@ def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
 
 def detect_stock(html: str, t: Target) -> Optional[bool]:
-    """Return True (in stock), False (OOS), or None (unknown).
-       Uses positive AND negative cues; includes schema.org availability.
-    """
+    """Return True (in stock), False (OOS), or None (unknown). Prefers JSON/schema signals."""
     mode = (t.parse.mode or "contains").lower()
     low = html.lower()
 
-    # Strong structured signals (if present)
-    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I):
-        print(f"[debug] {t.name}: schema.org availability -> InStock")
+    # 1) Strong structured signals (schema.org or embedded JSON)
+    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"IN_STOCK"', html, flags=re.I):
+        print(f"[debug] {t.name}: schema/JSON -> InStock")
         return True
-    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html, flags=re.I):
-        print(f"[debug] {t.name}: schema.org availability -> OutOfStock")
+    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html, flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"', html, flags=re.I):
+        print(f"[debug] {t.name}: schema/JSON -> OutOfStock")
         return False
 
-    def contains_any(text: str, needles: List[str]) -> bool:
-        return any(n.lower() in text for n in (needles or []))
-
+    # 2) Fallback to your configured rules
     if mode == "regex":
         pin = t.parse.pattern_in_stock
         pout = t.parse.pattern_out_of_stock
-        has_in = bool(re.search(pin, html, flags=re.I)) if pin else False
-        has_out = bool(re.search(pout, html, flags=re.I)) if pout else False
+        has_in = bool(re.search(pin, html, flags=re.I|re.S)) if pin else False
+        has_out = bool(re.search(pout, html, flags=re.I|re.S)) if pout else False
         print(f"[debug] {t.name}: regex has_in={has_in} has_out={has_out}")
         if has_in and not has_out:
             return True
         if has_out and not has_in:
             return False
         return None
+
+    # mode == "contains"
+    def contains_any(text: str, needles: List[str]) -> bool:
+        return any(n.lower() in text for n in (needles or []))
+    has_in = contains_any(low, t.parse.in_stock_contains)
+    has_out = contains_any(low, t.parse.out_of_stock_contains)
+    print(f"[debug] {t.name}: contains has_in={has_in} has_out={has_out}")
+    if has_in and not has_out:
+        return True
+    if has_out and not has_in:
+        return False
+    return None
 
     # mode == "contains"
     has_in = contains_any(low, t.parse.in_stock_contains)
