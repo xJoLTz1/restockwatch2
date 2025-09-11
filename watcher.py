@@ -147,7 +147,6 @@ def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]
 def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
 
-
 def safe_main():
     # env always present in Actions; we won’t hard-exit if missing
     repo = os.environ.get("GITHUB_REPOSITORY", "")
