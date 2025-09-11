@@ -147,6 +147,52 @@ def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]
 def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
 
+def detect_stock(html: str, t: Target) -> Optional[bool]:
+    mode = (t.parse.mode or "contains").lower()
+    low = html.lower()
+
+    if mode == "regex":
+        if t.parse.pattern_in_stock and re.search(t.parse.pattern_in_stock, html, flags=re.I):
+            return True
+        if t.parse.pattern_out_of_stock and re.search(t.parse.pattern_out_of_stock, html, flags=re.I):
+            return False
+        return None
+
+    # default "contains"
+    if t.parse.in_stock_contains:
+        if any(s.lower() in low for s in t.parse.in_stock_contains):
+            return True
+    if t.parse.out_of_stock_contains:
+        if any(s.lower() in low for s in t.parse.out_of_stock_contains):
+            return False
+    return None
+
+def maybe_send_pushover(token: Optional[str], user: Optional[str], title: str, message: str, url: Optional[str] = None):
+    if not token or not user:
+        return
+    data = {"token": token, "user": user, "title": title, "message": message}
+    if url:
+        data["url"] = url
+    try:
+        requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
+    except Exception as e:
+        print(f"[warn] pushover failed: {e}", file=sys.stderr)
+
+def maybe_send_telegram(bot_token: Optional[str], chat_id: Optional[str], title: str, message: str, url: Optional[str] = None):
+    if not bot_token or not chat_id:
+        return
+    text = f"*{title}*\n{message}"
+    if url:
+        text += f"\n{url}"
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=15
+        )
+    except Exception as e:
+        print(f"[warn] telegram failed: {e}", file=sys.stderr)
+
 def safe_main():
     # env always present in Actions; we won’t hard-exit if missing
     repo = os.environ.get("GITHUB_REPOSITORY", "")
