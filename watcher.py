@@ -281,20 +281,20 @@ def safe_main():
             if cat_html is None:
                 print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
                 continue
-                    # --- Bot-wall detection (Pokémon Center anti-bot page) ---
-    if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
-       re.search(r'/vice-come-[^"]+\\.js', cat_html, flags=re.I):
-        traffic_key = f"[PC BOT-WALL] {t.name}"
-        title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
-        body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
-        existing = find_issue_by_key(open_issues, traffic_key)
-        if not existing:
-            create_issue(repo, token, title, body, labels=[label])
-            print(f"[info] opened bot-wall issue for {t.name}")
-        else:
-            print(f"[info] bot-wall issue already open for {t.name}")
-        # Skip parsing links this run
-        continue
+        # --- Bot-wall detection (Pokémon Center anti-bot page) ---
+        if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
+           re.search(r'/vice-come-[^"]+\.js', cat_html, flags=re.I):
+            traffic_key = f"[PC BOT-WALL] {t.name}"
+            title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
+            body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
+            existing = find_issue_by_key(open_issues, traffic_key)
+            if not existing:
+                create_issue(repo, token, title, body, labels=[label])
+                print(f"[info] opened bot-wall issue for {t.name}")
+            else:
+                print(f"[info] bot-wall issue already open for {t.name}")
+            # Skip parsing links this run
+            continue
            
            product_urls = extract_pc_product_links(cat_html, max_links=30)
             if not product_urls:
