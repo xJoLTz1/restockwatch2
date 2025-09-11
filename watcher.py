@@ -262,7 +262,7 @@ def safe_main():
 
     label = "restockwatch"
 
-    # Best-effort: ensure label exists
+    # Best-effort: ensure label exists (422 if already exists is fine)
     _ = gh_call("POST", f"/repos/{repo}/labels", token,
                 {"name": label, "color": "0E8A16", "description": "Auto-created by restock watcher"})
 
@@ -273,6 +273,7 @@ def safe_main():
             print(f"[warn] Skipping target with empty URL: {t.name}", file=sys.stderr)
             continue
 
+        # --- Category expansion for Pokémon Center ---
         if (t.expand or "").lower() == "pc_category":
             # Fetch category page once
             cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
@@ -282,51 +283,7 @@ def safe_main():
                 print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
                 continue
 
-            # --- Bot-wall detection ---
-            if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
-               re.search(r'/vice-come-[^"]+\.js', cat_html, flags=re.I):
-                traffic_key = f"[PC BOT-WALL] {t.name}"
-                title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
-                body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
-                existing = find_issue_by_key(open_issues, traffic_key)
-                if not existing:
-                    create_issue(repo, token, title, body, labels=[label])
-                    print(f"[info] opened bot-wall issue for {t.name}")
-                else:
-                    print(f"[info] bot-wall issue already open for {t.name}")
-                continue  # still inside for t in cfg.targets
-
-            # Otherwise, extract and check product URLs
-            product_urls = extract_pc_product_links(cat_html, max_links=30)
-            if not product_urls:
-                print(f"[info] No product links found in category: {t.name}")
-                continue
-
-            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
-            for purl in product_urls:
-                ...
-            continue  # next target
-
-        # (rest of your normal product check code here)
-
-
-def safe_main():
-    ...
-    for t in cfg.targets:
-        if not t.url:
-            print(f"[warn] Skipping target with empty URL: {t.name}", file=sys.stderr)
-            continue
-
-        if (t.expand or "").lower() == "pc_category":
-            # Fetch category page once
-            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
-                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-            )
-            if cat_html is None:
-                print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
-                continue
-
-            # --- Bot-wall detection ---
+            # Bot-wall detection (Pokémon Center anti-bot page served to DC IPs)
             if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
                re.search(r'/vice-come-[^"]+\.js', cat_html, flags=re.I):
                 traffic_key = f"[PC BOT-WALL] {t.name}"
@@ -339,9 +296,9 @@ def safe_main():
                 else:
                     print(f"[info] bot-wall issue already open for {t.name}")
                 # Skip parsing links this run
-                continue  # ✅ this continue is still inside "for t in cfg.targets"
+                continue
 
-            # Extract product links
+            # Extract product links from the category page
             product_urls = extract_pc_product_links(cat_html, max_links=30)
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
@@ -349,16 +306,18 @@ def safe_main():
 
             print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
-            # Loop over each product
+            # Check each product page using the SAME parse rules from this target
             for purl in product_urls:
                 p_html, p_status, p_elapsed = fetch_html_with_retries(
                     purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
                 )
                 if p_html is None:
                     continue
-                state = detect_stock(p_html, t)
+
+                state = detect_stock(p_html, t)  # reuse this target's parse rules
                 print(f"[debug] {t.name}: detect_stock -> {state}")
-                stock_key = f"[{t.name}] {purl}"
+
+                stock_key = f"[{t.name}] {purl}"  # unique per product URL under this category
                 existing_stock = find_issue_by_key(open_issues, stock_key)
 
                 if state is True:
@@ -373,9 +332,68 @@ def safe_main():
                     if existing_stock:
                         close_issue(repo, token, existing_stock["number"])
                         print(f"[info] closed issue for {purl} (OOS)")
-                # else: unknown → do nothing
+                # else: Unknown—do nothing
 
-            continue  # ✅ this is also legal here, still inside the outer for-loop
+            # Done with this category target; move to next target
+            continue
+        # --- END category path ---
+
+        # 1) Fetch (returns body, status code, and elapsed ms)
+        html, status, elapsed_ms = fetch_html_with_retries(
+            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+        )
+        if html is None:
+            print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
+            continue
+
+        # Debug (optional): show we actually got content and what URL we checked
+        print(f"[debug] {t.name}: fetched {len(html)} bytes from {t.url}")
+
+        # 2) Traffic spike heuristics (optional early heads-up)
+        TRAFFIC_LATENCY_MS = 2500  # adjust if you like
+        HIGH_TRAFFIC_STATUSES = {429, 503}
+        if (status in HIGH_TRAFFIC_STATUSES) or (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS):
+            traffic_key = f"[TRAFFIC] {t.name}"
+            traffic_title = f"⚠️ High traffic/limited availability detected {traffic_key}"
+            traffic_body = (
+                f"Detected potential high traffic on: {t.name}\n\n"
+                f"URL: {t.url}\n"
+                f"HTTP status: {status}\n"
+                f"Latency: {elapsed_ms} ms\n\n"
+                f"_(Auto by RestockWatch)_"
+            )
+            existing_traffic = find_issue_by_key(open_issues, traffic_key)
+            if not existing_traffic:
+                create_issue(repo, token, traffic_title, traffic_body, labels=[label])
+                print(f"[info] opened traffic issue for {t.name}")
+            else:
+                print(f"[info] traffic issue already open for {t.name}")
+
+        # 3) Normal stock detection for single product URLs
+        state = detect_stock(html, t)
+        print(f"[debug] {t.name}: detect_stock -> {state}")
+        stock_key = f"[{t.name}]"
+        existing_stock = find_issue_by_key(open_issues, stock_key)
+
+        if state is True:
+            title = f"✅ IN STOCK {stock_key}"
+            body = f"{t.name} appears to be IN STOCK.\n\nURL: {t.url}\n\n_(Auto by RestockWatch)_"
+            if not existing_stock:
+                create_issue(repo, token, title, body, labels=[label])
+                maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, t.url, t.url)
+                maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, t.url, t.url)
+                print(f"[alert] opened issue for {t.name}")
+            else:
+                print(f"[info] already open issue for {t.name}")
+        elif state is False:
+            if existing_stock:
+                close_issue(repo, token, existing_stock["number"])
+                print(f"[info] closed issue for {t.name} (OOS)")
+            else:
+                print(f"[info] OOS and no open issue for {t.name}")
+        else:
+            print(f"[info] Unknown state for {t.name} (no action)")
+
 
         # 1) Fetch (returns body, status code, and elapsed ms)
         html, status, elapsed_ms = fetch_html_with_retries(
