@@ -268,71 +268,72 @@ def safe_main():
 
     open_issues = list_open_issues(repo, token, label=label)
 
+def safe_main():
+    ...
     for t in cfg.targets:
         if not t.url:
             print(f"[warn] Skipping target with empty URL: {t.name}", file=sys.stderr)
             continue
-        # --- NEW: category expansion for Pokémon Center ---
-    if (t.expand or "").lower() == "pc_category":
-        # Fetch category page once
-        cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
-            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-        )
-        if cat_html is None:
-            print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
-            continue
 
-        # --- Bot-wall detection (Pokémon Center anti-bot page) ---
-        if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
-           re.search(r'/vice-come-[^"]+\.js', cat_html, flags=re.I):
-            traffic_key = f"[PC BOT-WALL] {t.name}"
-            title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
-            body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
-            existing = find_issue_by_key(open_issues, traffic_key)
-            if not existing:
-                create_issue(repo, token, title, body, labels=[label])
-                print(f"[info] opened bot-wall issue for {t.name}")
-            else:
-                print(f"[info] bot-wall issue already open for {t.name}")
-            # Skip parsing links this run
-            continue
-
-        # Extract product links if no bot-wall
-        product_urls = extract_pc_product_links(cat_html, max_links=30)
-        if not product_urls:
-            print(f"[info] No product links found in category: {t.name}")
-            continue
-
-        print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
-
-        # Check each product page using the SAME parse rules from this target
-        for purl in product_urls:
-            p_html, p_status, p_elapsed = fetch_html_with_retries(
-                purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+        if (t.expand or "").lower() == "pc_category":
+            # Fetch category page once
+            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
+                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
             )
-            if p_html is None:
+            if cat_html is None:
+                print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
                 continue
-            state = detect_stock(p_html, t)  # reuse this target's parse rules
-            print(f"[debug] {t.name}: detect_stock -> {state}")
-            stock_key = f"[{t.name}] {purl}"  # unique per product URL under this category
-            existing_stock = find_issue_by_key(open_issues, stock_key)
 
-            if state is True:
-                title = f"✅ IN STOCK {stock_key}"
-                body = f"Appears IN STOCK.\n\nURL: {purl}\n\n_(Auto by RestockWatch)_"
-                if not existing_stock:
+            # --- Bot-wall detection ---
+            if re.search(r'<meta[^>]+name=["\']robots["\'][^>]+content=["\']noindex,?\s*nofollow', cat_html, flags=re.I) or \
+               re.search(r'/vice-come-[^"]+\.js', cat_html, flags=re.I):
+                traffic_key = f"[PC BOT-WALL] {t.name}"
+                title = f"⚠️ Pokémon Center bot-wall detected – {t.name}"
+                body = f"PC returned a bot-wall/JS shell for category:\n\n{t.url}\n\nThis often correlates with high traffic/queue."
+                existing = find_issue_by_key(open_issues, traffic_key)
+                if not existing:
                     create_issue(repo, token, title, body, labels=[label])
-                    maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, purl, purl)
-                    maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, purl, purl)
-                    print(f"[alert] opened issue for {purl}")
-            elif state is False:
-                if existing_stock:
-                    close_issue(repo, token, existing_stock["number"])
-                    print(f"[info] closed issue for {purl} (OOS)")
-            else:
-                pass
+                    print(f"[info] opened bot-wall issue for {t.name}")
+                else:
+                    print(f"[info] bot-wall issue already open for {t.name}")
+                # Skip parsing links this run
+                continue  # ✅ this continue is still inside "for t in cfg.targets"
 
-        continue
+            # Extract product links
+            product_urls = extract_pc_product_links(cat_html, max_links=30)
+            if not product_urls:
+                print(f"[info] No product links found in category: {t.name}")
+                continue
+
+            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
+
+            # Loop over each product
+            for purl in product_urls:
+                p_html, p_status, p_elapsed = fetch_html_with_retries(
+                    purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+                )
+                if p_html is None:
+                    continue
+                state = detect_stock(p_html, t)
+                print(f"[debug] {t.name}: detect_stock -> {state}")
+                stock_key = f"[{t.name}] {purl}"
+                existing_stock = find_issue_by_key(open_issues, stock_key)
+
+                if state is True:
+                    title = f"✅ IN STOCK {stock_key}"
+                    body = f"Appears IN STOCK.\n\nURL: {purl}\n\n_(Auto by RestockWatch)_"
+                    if not existing_stock:
+                        create_issue(repo, token, title, body, labels=[label])
+                        maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, purl, purl)
+                        maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, purl, purl)
+                        print(f"[alert] opened issue for {purl}")
+                elif state is False:
+                    if existing_stock:
+                        close_issue(repo, token, existing_stock["number"])
+                        print(f"[info] closed issue for {purl} (OOS)")
+                # else: unknown → do nothing
+
+            continue  # ✅ this is also legal here, still inside the outer for-loop
 
         # 1) Fetch (returns body, status code, and elapsed ms)
         html, status, elapsed_ms = fetch_html_with_retries(
