@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 import yaml
 
+# --- Traffic/latency heuristics ---
+TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic” signal
+HIGH_TRAFFIC_STATUSES = {429, 503}
+
 GITHUB_API = "https://api.github.com"
 
 @dataclass
