@@ -335,7 +335,9 @@ def safe_main():
                     body = f"Appears IN STOCK.\n\nURL: {purl}\n\n_(Auto by RestockWatch)_"
                     if not existing_stock:
                         create_issue(repo, token, title, body, labels=[label])
-                        maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, purl, purl)
+                        # REFRESH so subsequent checks see it and don’t reopen duplicates
+                        open_issues = list_open_issues(repo, token, label=label)
+
                         maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, purl, purl)
                         print(f"[alert] opened issue for {purl}")
                 elif state is False:
@@ -374,7 +376,9 @@ def safe_main():
             )
             existing_traffic = find_issue_by_key(open_issues, traffic_key)
             if not existing_traffic:
-                create_issue(repo, token, traffic_title, traffic_body, labels=[label])
+                create_issue(repo, token, title, body, labels=[label])
+                # REFRESH so subsequent checks see it and don’t reopen duplicates
+                open_issues = list_open_issues(repo, token, label=label)
                 print(f"[info] opened traffic issue for {t.name}")
             else:
                 print(f"[info] traffic issue already open for {t.name}")
@@ -390,6 +394,8 @@ def safe_main():
             body = f"{t.name} appears to be IN STOCK.\n\nURL: {t.url}\n\n_(Auto by RestockWatch)_"
             if not existing_stock:
                 create_issue(repo, token, title, body, labels=[label])
+                # REFRESH so subsequent checks see it and don’t reopen duplicates
+                open_issues = list_open_issues(repo, token, label=label)
                 maybe_send_pushover(cfg.pushover_token, cfg.pushover_user, title, t.url, t.url)
                 maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, t.url, t.url)
                 print(f"[alert] opened issue for {t.name}")
