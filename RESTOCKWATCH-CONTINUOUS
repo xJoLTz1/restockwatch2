@@ -1,0 +1,46 @@
+name: Restock Watch (continuous)
+
+on:
+  workflow_dispatch: {}   # you click “Run workflow” to start it
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: restockwatch-continuous
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: self-hosted
+    timeout-minutes: 4320   # ~72 hours max per job (GitHub limit)
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Loop every 60s
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # auto-provided per run
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Optional push channels (if you’ve set them in repo secrets):
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          while true; do
+            echo "=== $(date) ==="
+            python watcher.py || true
+            sleep 60
+          done
