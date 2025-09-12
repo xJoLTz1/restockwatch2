@@ -1,7 +1,7 @@
 name: Restock Watch (continuous)
 
 on:
-  workflow_dispatch: {}   # you click “Run workflow” to start it
+  workflow_dispatch: {}  # you click "Run workflow" to start it
 
 permissions:
   contents: read
@@ -14,39 +14,34 @@ concurrency:
 jobs:
   watch:
     runs-on: self-hosted
-    timeout-minutes: 4320
+    timeout-minutes: 4320  # ~72 hours
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-- name: Use system Python (sanity check)
-  run: C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -V
+      - name: Use system Python (sanity check)
+        shell: powershell
+        run: 'C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -V'
 
-- name: Install deps
-  run: |
-    C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -m pip install --upgrade pip
-    C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -m pip install -r requirements.txt
-
-- name: Loop every 60s
-  run: |
-    while ($true) {
-      Write-Host "=== $(Get-Date) ==="
-      C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe watcher.py
-      Start-Sleep -Seconds 60
-    }
+      - name: Install deps
+        shell: powershell
+        run: |
+          C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -m pip install --upgrade pip
+          C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe -m pip install -r requirements.txt
 
       - name: Loop every 60s
+        shell: powershell
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # auto-provided per run
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # Optional push channels (if you’ve set them in repo secrets):
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          while true; do
-            echo "=== $(date) ==="
-            python watcher.py || true
-            sleep 60
-          done
+          while ($true) {
+            Write-Host "=== $(Get-Date) ==="
+            C:\Users\josep\AppData\Local\Microsoft\WindowsApps\python.exe watcher.py
+            Start-Sleep -Seconds 60
+          }
