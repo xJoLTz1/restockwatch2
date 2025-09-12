@@ -402,36 +402,37 @@ def safe_main():
 
         # 1) Fetch (returns body, status code, and elapsed ms)
         html, status, elapsed_ms = fetch_html_with_retries(
-            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-        )
-        if html is None:
-            print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
-            continue
+    t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+)
+if html is None:
+    print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
+    continue
 
-        # Debug (optional): show we actually got content and what URL we checked
-        print(f"[debug] {t.name}: fetched {len(html)} bytes from {t.url}")
+# Debug (optional): show content size and latency
+print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
 
-        # 2) Traffic spike heuristics (optional early heads-up)
-        TRAFFIC_LATENCY_MS = 2500  # adjust if you like
-        HIGH_TRAFFIC_STATUSES = {429, 503}
-        if (status in HIGH_TRAFFIC_STATUSES) or (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS):
-            traffic_key = f"[TRAFFIC] {t.name}"
-            traffic_title = f"⚠️ High traffic/limited availability detected {traffic_key}"
-            traffic_body = (
-                f"Detected potential high traffic on: {t.name}\n\n"
-                f"URL: {t.url}\n"
-                f"HTTP status: {status}\n"
-                f"Latency: {elapsed_ms} ms\n\n"
-                f"_(Auto by RestockWatch)_"
-            )
-            existing_traffic = find_issue_by_key(open_issues, traffic_key)
-            if not existing_traffic:
-                create_issue(repo, token, title, body, labels=[label])
-                # REFRESH so subsequent checks see it and don’t reopen duplicates
-                open_issues = list_open_issues(repo, token, label=label)
-                print(f"[info] opened traffic issue for {t.name}")
-            else:
-                print(f"[info] traffic issue already open for {t.name}")
+# 2) Traffic spike heuristics (optional early heads-up)
+is_high_status  = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
+is_high_latency = (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS)
+
+if is_high_status or is_high_latency:
+    traffic_key = f"[TRAFFIC] {t.name}"
+    traffic_title = f"⚠️ High traffic detected {traffic_key}"
+    traffic_body = (
+        f"Detected potential high traffic on: {t.name}\n\n"
+        f"URL: {t.url}\n"
+        f"HTTP status: {status}\n"
+        f"Latency: {elapsed_ms} ms\n\n"
+        f"_(Auto by RestockWatch)_"
+    )
+    existing_traffic = find_issue_by_key(open_issues, traffic_key)
+    if not existing_traffic:
+        create_issue(repo, token, traffic_title, traffic_body, labels=[label])
+        # refresh open issues so we don’t re-open this next loop
+        open_issues = list_open_issues(repo, token, label=label)
+        print(f"[info] opened traffic issue for {t.name}")
+    else:
+        print(f"[info] traffic issue already open for {t.name}")
 
         # 3) Normal stock detection for single product URLs
         state = detect_stock(html, t)
