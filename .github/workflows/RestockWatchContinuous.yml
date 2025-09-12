@@ -18,7 +18,7 @@ jobs:
 
     # 👉 Set ONE of these to the path you installed above.
     env:
-      PYPATH: C:\Python311\python.exe
+      PYPATH: C:\Program Files\Python311\python.exe
 
     steps:
       - name: Checkout repo
