@@ -6,80 +6,161 @@ targets:
   - name: "Target – Twilight Masquerade Elite Trainer Bundle"
     url: "https://www.target.com/p/blaze/-/A-91619960?clkid=e16ce7a3N89d711f0b1e7c13254943ab0&cpng=&TCID=AFL-e16ce7a3N89d711f0b1e7c13254943ab0&lnm=81938&afid=Mavely&ref=tgt_adv_xasd0002"
     parse:
-    mode: "regex"
-pattern_in_stock: >
-    (?s)
-    "availability_status"\s*:\s*"IN_STOCK"
-    |
-    "inventory_status"\s*:\s*"IN_STOCK"
-    |
-    <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
-pattern_out_of_stock: >
-    (?s)
-    "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
-    |
-    "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
-    |
-    <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
-    |
-    Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+      pattern_out_of_stock: >
+        (?s)
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+        |
+        Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
 
   - name: "Target – Destined Rivals Booster Bundle"
     url: "https://www.target.com/p/pok%C3%A9mon-trading-card-game-scarlet-38-violet-8212-destined-rivals-booster-bundle/-/A-94300067"
     parse:
-  mode: "regex"
-  pattern_in_stock: >
-    (?s)
-    "availability_status"\s*:\s*"IN_STOCK"
-    |
-    "inventory_status"\s*:\s*"IN_STOCK"
-    |
-    <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
-  pattern_out_of_stock: >
-    (?s)
-    "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
-    |
-    "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
-    |
-    <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
-    |
-    Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+      pattern_out_of_stock: >
+        (?s)
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+        |
+        Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
 
   - name: "Pokémon Center – Phantasmal Flames Elite Trainer Box"
     url: "https://www.pokemoncenter.com/product/10-10186-109/"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Out of Stock","Sold Out"]
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*InStock"
+        |
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        Add\s*to\s*(cart|bag)
+      pattern_out_of_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*OutOfStock"
+        |
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        Sold\s*out|Out\s*of\s*stock|Notify\s*me|Get\s*in-stock\s*alert|Check\s*back\s*soon
 
   - name: "PC – Obsidian Flames ETB"
     url: "https://www.pokemoncenter.com/product/186-85392/pokemon-tcg-scarlet-and-violet-obsidian-flames-pokemon-center-elite-trainer-box"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*InStock"
+        |
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        Add\s*to\s*(cart|bag)
+      pattern_out_of_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*OutOfStock"
+        |
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        Sold\s*out|Out\s*of\s*stock|Notify\s*me|Get\s*in-stock\s*alert|Check\s*back\s*soon
 
   - name: "PC – Prismatic Evolutions Binder Collection"
     url: "https://www.pokemoncenter.com/product/10-10023-101/pokemon-tcg-scarlet-and-violet-prismatic-evolutions-binder-collection"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*InStock"
+        |
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        Add\s*to\s*(cart|bag)
+      pattern_out_of_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*OutOfStock"
+        |
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        Sold\s*out|Out\s*of\s*stock|Notify\s*me|Get\s*in-stock\s*alert|Check\s*back\s*soon
 
   - name: "PC – Phantasmal Flames Booster Bundle"
     url: "https://www.pokemoncenter.com/product/10-10191-109/"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*InStock"
+        |
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        Add\s*to\s*(cart|bag)
+      pattern_out_of_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*OutOfStock"
+        |
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        Sold\s*out|Out\s*of\s*stock|Notify\s*me|Get\s*in-stock\s*alert|Check\s*back\s*soon
 
   - name: "PC – Phantasmal Flames Booster Box"
     url: "https://www.pokemoncenter.com/product/10-10190-119/"
     parse:
-      mode: "contains"
-      in_stock_contains: ["Add to Cart","Add to Bag"]
-      out_of_stock_contains: ["Sold Out","Out of Stock"]
+      mode: "regex"
+      pattern_in_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*InStock"
+        |
+        "availability_status"\s*:\s*"IN_STOCK"
+        |
+        "inventory_status"\s*:\s*"IN_STOCK"
+        |
+        Add\s*to\s*(cart|bag)
+      pattern_out_of_stock: >
+        (?s)
+        "availability"\s*:\s*"[^"]*OutOfStock"
+        |
+        "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+        |
+        Sold\s*out|Out\s*of\s*stock|Notify\s*me|Get\s*in-stock\s*alert|Check\s*back\s*soon
 
+  # Category scans (may need self-hosted runner to bypass PC bot-wall)
   - name: "PC – ANY ETB in stock (category)"
     url: "https://www.pokemoncenter.com/category/elite-trainer-box"
     expand: "pc_category"
@@ -120,9 +201,3 @@ pattern_out_of_stock: >
       pattern_in_stock: "(Add\\s*to\\s*(cart|bag)|aria-label=\\\"Add to cart\\\"|data-automation-id=\\\"add-to-cart\\\"|btn--add-to-cart|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*InStock)"
       pattern_out_of_stock: "(Sold\\s*out|Out\\s*of\\s*stock|Notify\\s*me|Get\\s*in-stock\\s*alert|Check\\s*back\\s*soon|\\\"availability\\\"\\s*:\\s*\\\"[^\\\"]*OutOfStock)"
 
-  - name: "TEST – Always match"
-    url: "https://www.pokemoncenter.com/"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "."
-      pattern_out_of_stock: ""
