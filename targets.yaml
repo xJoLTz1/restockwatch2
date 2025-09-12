@@ -5,7 +5,7 @@ user_agent: "RestockWatch-GHA/1.0"
 targets:
   - name: "Target – Twilight Masquerade Elite Trainer Bundle"
     url: "https://www.target.com/p/blaze/-/A-91619960?clkid=e16ce7a3N89d711f0b1e7c13254943ab0&cpng=&TCID=AFL-e16ce7a3N89d711f0b1e7c13254943ab0&lnm=81938&afid=Mavely&ref=tgt_adv_xasd0002"
-  parse:
+    parse:
     mode: "regex"
 pattern_in_stock: >
     (?s)
@@ -26,7 +26,7 @@ pattern_out_of_stock: >
 
   - name: "Target – Destined Rivals Booster Bundle"
     url: "https://www.target.com/p/pok%C3%A9mon-trading-card-game-scarlet-38-violet-8212-destined-rivals-booster-bundle/-/A-94300067"
-parse:
+    parse:
   mode: "regex"
   pattern_in_stock: >
     (?s)
