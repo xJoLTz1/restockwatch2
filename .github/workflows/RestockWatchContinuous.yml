@@ -1,7 +1,7 @@
 name: Restock Watch (continuous)
 
 on:
-  workflow_dispatch: {}  # click "Run workflow" to start
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -14,19 +14,24 @@ concurrency:
 jobs:
   watch:
     runs-on: self-hosted
-    timeout-minutes: 4320  # ~72 hours
+    timeout-minutes: 4320
 
+    # 👉 Set ONE of these to the path you installed above.
     env:
-      # <-- If your Python path changes, update this one line:
-      PYPATH: C:\Users\josep\AppData\Local\Programs\Python\Python313\python.exe
+      PYPATH: C:\Python311\python.exe
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Sanity check Python
+      - name: Verify Python exists (fail fast)
         shell: powershell
-        run: '& "${env:PYPATH}" -V'
+        run: |
+          if (-not (Test-Path "${env:PYPATH}")) {
+            Write-Error "Python not found at ${env:PYPATH}. Install it machine-wide or update PYPATH."
+            exit 1
+          }
+          & "${env:PYPATH}" -V
 
       - name: Install deps
         shell: powershell
