@@ -79,10 +79,6 @@ def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
     Scrape Pokémon Center product links from a category page.
     Handles href, data-pdp-url, absolute URLs, and JSON-embedded strings.
     """
-    # Quick peek at the HTML we actually have (first 300 chars)
-    head = re.sub(r"\s+", " ", html[:300])
-    print(f"[debug] PC category HTML head: {head}")
-
     patterns = [
         r'href=[\'"](/product/[^\'"]+)[\'"]',                           # <a href="/product/...">
         r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',                   # data-pdp-url="/product/..."
@@ -103,7 +99,6 @@ def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
                 if len(found) >= max_links:
                     return found
     return found
-
 
 def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
     headers = {
@@ -166,6 +161,36 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
     """Return True (in stock), False (OOS), or None (unknown). Prefers JSON/schema signals."""
     mode = (t.parse.mode or "contains").lower()
     low = html.lower()
+
+    # Strong structured signals (often present even in JS shells)
+    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"IN_STOCK"', html, flags=re.I):
+        return True
+    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html, flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"', html, flags=re.I):
+        return False
+
+    if mode == "regex":
+        pin = t.parse.pattern_in_stock
+        pout = t.parse.pattern_out_of_stock
+        has_in = bool(re.search(pin, html, flags=re.I|re.S)) if pin else False
+        has_out = bool(re.search(pout, html, flags=re.I|re.S)) if pout else False
+        if has_in and not has_out:
+            return True
+        if has_out and not has_in:
+            return False
+        return None
+
+    # mode == "contains"
+    def contains_any(text: str, needles: List[str]) -> bool:
+        return any(n.lower() in text for n in (needles or []))
+    has_in = contains_any(low, t.parse.in_stock_contains)
+    has_out = contains_any(low, t.parse.out_of_stock_contains)
+    if has_in and not has_out:
+        return True
+    if has_out and not has_in:
+        return False
+    return None
 
     # Structured signals: many commerce sites include these even in JS shells
     if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I) or \
