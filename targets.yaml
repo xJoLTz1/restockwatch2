@@ -5,20 +5,45 @@ user_agent: "RestockWatch-GHA/1.0"
 targets:
   - name: "Target – Twilight Masquerade Elite Trainer Bundle"
     url: "https://www.target.com/p/blaze/-/A-91619960?clkid=e16ce7a3N89d711f0b1e7c13254943ab0&cpng=&TCID=AFL-e16ce7a3N89d711f0b1e7c13254943ab0&lnm=81938&afid=Mavely&ref=tgt_adv_xasd0002"
-    parse:
-      mode: "regex"
-      # Enabled button (no disabled/aria-disabled) OR explicit JSON availability
-      pattern_in_stock: "(?s)<button[^>]*data-test=\\\"addToCartButton\\\"[^>]*(?<!disabled)(?<!aria-disabled=\\\"true\\\")[^>]*>\\s*Add\\s*to\\s*cart\\s*</button>|\\b(availability_status|availability|inventory_status)\\b\\s*:\\s*\\\"IN_STOCK\\\""
-      # Disabled button or standard OOS/Unavailable states
-      pattern_out_of_stock: "(?s)<button[^>]*data-test=\\\"addToCartButton\\\"[^>]*(disabled|aria-disabled=\\\"true\\\")[^>]*>\\s*Add\\s*to\\s*cart\\s*</button>|Sold\\s*out|Out\\s*of\\s*stock|Not\\s*available|Temporarily\\s*out\\s*of\\s*stock|Check\\s*back\\s*soon|\\b(availability_status|availability|inventory_status)\\b\\s*:\\s*\\\"(OUT_OF_STOCK|UNAVAILABLE)\\\""
+  parse:
+    mode: "regex"
+pattern_in_stock: >
+    (?s)
+    "availability_status"\s*:\s*"IN_STOCK"
+    |
+    "inventory_status"\s*:\s*"IN_STOCK"
+    |
+    <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+pattern_out_of_stock: >
+    (?s)
+    "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+    |
+    "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+    |
+    <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+    |
+    Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
 
   - name: "Target – Destined Rivals Booster Bundle"
     url: "https://www.target.com/p/pok%C3%A9mon-trading-card-game-scarlet-38-violet-8212-destined-rivals-booster-bundle/-/A-94300067"
-    parse:
-      mode: "regex"
-      pattern_in_stock: "(?s)<button[^>]*data-test=\\\"addToCartButton\\\"[^>]*(?<!disabled)(?<!aria-disabled=\\\"true\\\")[^>]*>\\s*Add\\s*to\\s*cart\\s*</button>|\\b(availability_status|availability|inventory_status)\\b\\s*:\\s*\\\"IN_STOCK\\\""
-      pattern_out_of_stock: "(?s)<button[^>]*data-test=\\\"addToCartButton\\\"[^>]*(disabled|aria-disabled=\\\"true\\\")[^>]*>\\s*Add\\s*to\\s*cart\\s*</button>|Sold\\s*out|Out\\s*of\\s*stock|Not\\s*available|Temporarily\\s*out\\s*of\\s*stock|Check\\s*back\\s*soon|\\b(availability_status|availability|inventory_status)\\b\\s*:\\s*\\\"(OUT_OF_STOCK|UNAVAILABLE)\\\""
-
+parse:
+  mode: "regex"
+  pattern_in_stock: >
+    (?s)
+    "availability_status"\s*:\s*"IN_STOCK"
+    |
+    "inventory_status"\s*:\s*"IN_STOCK"
+    |
+    <button[^>]*data-test="addToCartButton"[^>]*(?<!disabled)(?<!aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+  pattern_out_of_stock: >
+    (?s)
+    "availability_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+    |
+    "inventory_status"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"
+    |
+    <button[^>]*data-test="addToCartButton"[^>]*(disabled|aria-disabled="true")[^>]*>\s*Add\s*to\s*cart\s*</button>
+    |
+    Sold\s*out|Out\s*of\s*stock|Not\s*available|Temporarily\s*out\s*of\s*stock|Check\s*back\s*soon
 
   - name: "Pokémon Center – Phantasmal Flames Elite Trainer Box"
     url: "https://www.pokemoncenter.com/product/10-10186-109/"
