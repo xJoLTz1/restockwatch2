@@ -118,6 +118,52 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             time.sleep(1.0)
     return None, None, None
 
+import asyncio
+import logging
+import time
+import httpx
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [info] %(message)s"
+)
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "text/html,application/xhtml+xml",
+}
+
+POKEMON_CENTER_CATEGORIES = [
+    "https://www.pokemoncenter.com/category/elite-trainer-box",
+    "https://www.pokemoncenter.com/category/tcg-cards",
+    "https://www.pokemoncenter.com/category/booster-packs",
+    "https://www.pokemoncenter.com/category/boxed-sets",
+    "https://www.pokemoncenter.com/category/tins",
+]
+
+async def fetch_with_latency(client: httpx.AsyncClient, url: str):
+    t0 = time.perf_counter()
+    resp = await client.get(url, headers=HEADERS, timeout=20.0)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    size = len(resp.content) if resp.content is not None else 0
+    logging.info(
+        "PokemonCenter: fetched %d bytes in %.1f ms (status=%d) from %s",
+        size, elapsed_ms, resp.status_code, url
+    )
+    resp.raise_for_status()
+    return resp.text, elapsed_ms
+
+async def main():
+    limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
+    async with httpx.AsyncClient(follow_redirects=True, limits=limits) as client:
+        tasks = [fetch_with_latency(client, url) for url in POKEMON_CENTER_CATEGORIES]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # ... parse results here
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
 # --- GitHub API helpers (required) ---
 def gh_call(method: str, path: str, token: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Any]:
     if not token:
