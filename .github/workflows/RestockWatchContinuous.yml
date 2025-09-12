@@ -14,15 +14,29 @@ concurrency:
 jobs:
   watch:
     runs-on: self-hosted
-    timeout-minutes: 4320   # ~72 hours max per job (GitHub limit)
+    timeout-minutes: 4320
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Use system Python (sanity check)
+        run: python --version
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Loop every 60s
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          while true; do
+            echo "=== $(date) ==="
+            python watcher.py || true
+            sleep 60
+          done
 
       - name: Loop every 60s
         env:
