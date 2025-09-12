@@ -1,7 +1,7 @@
 name: Restock Watch (continuous)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch: {}  # click "Run workflow" to start
 
 permissions:
   contents: read
@@ -14,9 +14,10 @@ concurrency:
 jobs:
   watch:
     runs-on: self-hosted
-    timeout-minutes: 4320
+    timeout-minutes: 4320  # ~72 hours
 
     env:
+      # <-- If your Python path changes, update this one line:
       PYPATH: C:\Users\josep\AppData\Local\Programs\Python\Python313\python.exe
 
     steps:
@@ -25,13 +26,13 @@ jobs:
 
       - name: Sanity check Python
         shell: powershell
-        run: '"${env:PYPATH}" -V'
+        run: '& "${env:PYPATH}" -V'
 
       - name: Install deps
         shell: powershell
         run: |
-          "${env:PYPATH}" -m pip install --upgrade pip
-          "${env:PYPATH}" -m pip install -r requirements.txt
+          & "${env:PYPATH}" -m pip install --upgrade pip
+          & "${env:PYPATH}" -m pip install -r requirements.txt
 
       - name: Loop every 60s
         shell: powershell
@@ -45,6 +46,6 @@ jobs:
         run: |
           while ($true) {
             Write-Host "=== $(Get-Date) ==="
-            "${env:PYPATH}" watcher.py
+            & "${env:PYPATH}" watcher.py
             Start-Sleep -Seconds 60
           }
