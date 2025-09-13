@@ -620,4 +620,3 @@ if __name__ == "__main__":
         safe_main()
     except Exception as e:
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
-
