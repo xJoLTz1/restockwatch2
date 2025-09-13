@@ -64,6 +64,10 @@ jobs:
           PC_HEADED: "1"
           DEBUG_PC_DUMP: "1"
           PC_BLOCK_CHALLENGE_JS: "0"
+          PC_USE_PERSISTENT: "1"
+          PC_USER_DATA_DIR: E:\actions-runner\pw-profile
+          PC_CHALLENGE_TIMEOUT_S: "180"
+          PC_STORAGE_STATE_PATH: E:\actions-runner\pw-profile\pc_state.json
         run: |
           while ($true) {
             Write-Host "=== $(Get-Date) ==="
