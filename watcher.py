@@ -150,7 +150,7 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     """
     Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
-    Forces a realistic desktop UA and does light interaction to bypass the JS shell.
+    Uses stronger waits and light stealth to avoid the JS shell.
     """
     from playwright.sync_api import sync_playwright
     import time as _time
@@ -160,7 +160,14 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     status = None
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                ],
+            )
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
@@ -173,11 +180,15 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
-            context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            context.add_init_script("""
+                Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            """)
 
             page = context.new_page()
             main_response = None
-
             def _resp(r):
                 nonlocal main_response
                 if r.url.split("#")[0] == url.split("#")[0] and main_response is None:
@@ -186,7 +197,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
 
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # Try to accept cookie banners (best-effort, ignore errors)
+            # Best-effort cookies
             for sel in [
                 'button:has-text("Accept All")',
                 'button:has-text("Accept all")',
@@ -201,28 +212,17 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     pass
 
-            # Nudge page to actually render content: small scroll+idle wait
+            # Nudge + longer stabilization
+            try: page.mouse.wheel(0, 1200)
+            except Exception: pass
             try:
-                page.mouse.wheel(0, 1000)
+                page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
-                pass
+                page.wait_for_timeout(2500)
 
-            # Wait for product/link hints if available; otherwise small idle
-            waited = False
-            for sel in [
-                'a[href^="/product/"]',
-                '[data-pdp-url]',
-                '[data-automation-id="product"]',
-                'script[type="application/ld+json"]',
-            ]:
-                try:
-                    page.wait_for_selector(sel, timeout=3000)
-                    waited = True
-                    break
-                except Exception:
-                    continue
-            if not waited:
-                page.wait_for_timeout(1800)
+            # If still looks empty, give it one more small wait
+            if len((page.content() or "")) < 4000:
+                page.wait_for_timeout(1500)
 
             html = page.content()
             status = main_response.status if main_response else 200
@@ -234,9 +234,6 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
         return None, None, None
 
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-    # Lightweight bot-wall signal for your logs
-    if len(html or "") < 5000 and re.search(r'/vice-come-[^"]+\.js|NOINDEX,?\s*NOFOLLOW', html or "", flags=re.I):
-        print(f"[info] PC JS shell likely for {url} (len={len(html)})", file=sys.stderr)
     return html, status, elapsed_ms
 
 def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
@@ -259,16 +256,31 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
 
 def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
     """
-    Re-render a category URL and pull product links from the live DOM
-    (avoids brittle regex when PC injects links client-side).
+    Re-render a category URL and pull product links using multiple strategies:
+      1) JSON-LD itemListElement
+      2) Anchors/data-pdp-url in hydrated DOM
+      3) Quick View modal: if 'Add to Cart' is visible, record its PDP link or tile link
     """
     from playwright.sync_api import sync_playwright
-
     links: List[str] = []
     base = "https://www.pokemoncenter.com"
+
+    def _normalize(h: Optional[str]) -> Optional[str]:
+        if not h:
+            return None
+        h = h.strip()
+        if h.startswith("/product/"):
+            return base + h.split("?")[0]
+        if h.startswith("https://www.pokemoncenter.com/product/"):
+            return h.split("?")[0]
+        return None
+
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled","--no-sandbox","--disable-gpu"],
+            )
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
@@ -276,16 +288,14 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                 timezone_id="America/New_York",
                 java_script_enabled=True,
             )
+            context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # cookie accept best-effort
+            # Accept cookies (best-effort)
             for sel in [
-                'button:has-text("Accept All")',
-                'button:has-text("Accept all")',
-                'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]',
-                '[id*="onetrust-accept"]',
+                'button:has-text("Accept All")','button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]','[id*="onetrust-accept"]'
             ]:
                 try:
                     if page.is_visible(sel, timeout=500):
@@ -294,31 +304,86 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                 except Exception:
                     pass
 
-            # Let products load
+            # Stabilize
+            try: page.mouse.wheel(0, 1200)
+            except Exception: pass
+            try: page.wait_for_load_state("networkidle", timeout=6000)
+            except Exception: page.wait_for_timeout(2000)
+
+            # --- (1) JSON-LD list
             try:
-                page.mouse.wheel(0, 1200)
+                jsonlds = page.eval_on_selector_all(
+                    'script[type="application/ld+json"]',
+                    'els => els.map(e=>e.textContent)'
+                )
+                for raw in (jsonlds or []):
+                    try:
+                        import json
+                        data = json.loads(raw)
+                        items = []
+                        if isinstance(data, dict) and "itemListElement" in data:
+                            items = data["itemListElement"]
+                        if isinstance(data, list):
+                            for d in data:
+                                if isinstance(d, dict) and "itemListElement" in d:
+                                    items += d["itemListElement"]
+                        for it in items:
+                            url_field = None
+                            if isinstance(it, dict):
+                                url_field = it.get("url") or (it.get("item") or {}).get("url")
+                            norm = _normalize(url_field)
+                            if norm and norm not in links:
+                                links.append(norm)
+                    except Exception:
+                        continue
             except Exception:
                 pass
-            try:
-                page.wait_for_selector('a[href^="/product/"]', timeout=3500)
-            except Exception:
-                page.wait_for_timeout(2000)
 
-            hrefs = page.eval_on_selector_all(
-                'a[href^="/product/"]', 'els => els.map(e => e.getAttribute("href"))'
-            ) or []
+            # --- (2) Anchors / data-pdp-url in DOM
+            if not links:
+                hrefs = page.eval_on_selector_all(
+                    'a[href*="/product/"], [data-pdp-url]',
+                    '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
+                ) or []
+                for h in hrefs:
+                    norm = _normalize(h)
+                    if norm and norm not in links:
+                        links.append(norm)
 
-            # dedupe & normalize
-            seen = set()
-            for h in hrefs:
-                if not h:
-                    continue
-                if not h.startswith("/product/"):
-                    continue
-                full = (base + h.split("?")[0]).strip()
-                if full not in seen:
-                    seen.add(full)
-                    links.append(full)
+            # --- (3) Quick View probing (limited to first ~6 tiles)
+            if not links:
+                # Find tiles with a Quick View button
+                tiles = page.query_selector_all('button:has-text("Quick View"), [data-testid="quick-view"]')
+                tiles = tiles[:6]  # keep it light
+                for btn in tiles:
+                    try:
+                        btn.click(timeout=1500)
+                        # wait for modal
+                        page.wait_for_selector('div[role="dialog"], [data-testid*="modal"]', timeout=2000)
+                        # check availability text
+                        txt = (page.inner_text('div[role="dialog"], [data-testid*="modal"]') or "").lower()
+                        if ("add to cart" in txt or "add to bag" in txt) and ("unavailable" not in txt):
+                            # Try to find a link inside the modal, else fall back: record the page URL
+                            modal_href = None
+                            try:
+                                modal_href = page.get_attribute('div[role="dialog"] a[href*="/product/"]', "href")
+                            except Exception:
+                                pass
+                            norm = _normalize(modal_href) or url  # last resort
+                            if norm and norm not in links:
+                                links.append(norm)
+                    except Exception:
+                        pass
+                    finally:
+                        # close the modal
+                        try:
+                            # common close patterns
+                            for sel in ['button:has-text("Close")', '[aria-label="Close"]', 'button[title="Close"]']:
+                                if page.is_visible(sel, timeout=300):
+                                    page.click(sel, timeout=300)
+                                    break
+                        except Exception:
+                            pass
 
             context.close()
             browser.close()
@@ -482,14 +547,14 @@ def safe_main():
                 f"[debug] {t.name} [category]: fetched {len(cat_html)} bytes in {cat_elapsed} ms "
                 f"(status={cat_status}, source={cat_source}) from {t.url}"
             )
-
+            
             # Extract product links from the category page
-            # Prefer live DOM extraction; if it returns none, fall back to regex on HTML
-            product_urls = extract_pc_links_from_dom_with_playwright(
-                t.url, timeout_seconds=cfg.timeout_seconds
-            )
-            if not product_urls:
-                product_urls = extract_pc_product_links(cat_html, max_links=30)
+        product_urls = extract_pc_links_from_dom_with_playwright(
+        t.url, timeout_seconds=cfg.timeout_seconds
+    )   
+        if not product_urls:
+    # Fallback to regex on the rendered HTML we already downloaded
+    product_urls = extract_pc_product_links(cat_html, max_links=30)
 
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
