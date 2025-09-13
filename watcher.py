@@ -52,6 +52,12 @@ _PC_EXTRA_HEADERS = {
     "sec-ch-ua-mobile": "?0",
 }
 
+# Imperva / session handling
+PC_USE_PERSISTENT = os.environ.get("PC_USE_PERSISTENT", "").strip() == "1"
+PC_USER_DATA_DIR  = os.environ.get("PC_USER_DATA_DIR", "pc_debug/pw-profile")
+PC_CHALLENGE_TIMEOUT_S = int(os.environ.get("PC_CHALLENGE_TIMEOUT_S", "180"))
+STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
+
 # --- Traffic/latency heuristics ----------------------------------------------
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
 HIGH_TRAFFIC_STATUSES = {429, 503}
@@ -206,6 +212,64 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
         print(f"[warn] debug info write failed: {e}", file=sys.stderr)
 
 # ---- Playwright context / routing -------------------------------------------
+from playwright.sync_api import sync_playwright
+
+def _open_context(pw):
+    """
+    Returns a Playwright *context*. If PC_USE_PERSISTENT=1, this is already a persistent context.
+    In non-persistent mode, we create a browser + context and attach the browser handle for closing.
+    """
+    extra_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
+        "--disable-gpu",
+    ]
+
+    if PC_USE_PERSISTENT:
+        ctx = pw.chromium.launch_persistent_context(
+            user_data_dir=PC_USER_DATA_DIR,
+            headless=not PC_HEADED,
+            args=extra_args,
+        )
+    else:
+        browser = pw.chromium.launch(headless=not PC_HEADED, args=extra_args)
+        ctx = browser.new_context()
+        ctx._attached_browser = browser  # so we can close it later
+
+    # headers, UA, spoofing
+    ctx.set_default_timeout(20_000)
+    ctx.set_extra_http_headers(_PC_EXTRA_HEADERS)
+    ctx.add_init_script("""
+        Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+        window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
+        Object.defineProperty(navigator, 'mimeTypes', { get: () => [1,2] });
+    """)
+    # use our “real” UA + viewport
+    ctx.grant_permissions([], origin="https://www.pokemoncenter.com")
+    ctx.set_default_navigation_timeout(20_000)
+    try:
+        ctx.set_geolocation({'latitude': 40.7128, 'longitude': -74.0060})  # harmless; some walls like it
+    except Exception:
+        pass
+    return ctx
+
+def _close_context(ctx):
+    try:
+        ctx.close()
+    except Exception:
+        pass
+    # close attached browser if non-persistent
+    br = getattr(ctx, "_attached_browser", None)
+    if br:
+        try:
+            br.close()
+        except Exception:
+            pass
+
 
 def _launch_browser(pw):
     """Single place to control headless/headed + common args."""
@@ -300,69 +364,61 @@ def _wire_challenge_blocking(page):
 # =========================
 
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
-    """
-    Render Pokemon Center pages and return (html, status, elapsed_ms).
-    Attempt 1: (maybe) block Imperva JS (if PC_BLOCK_CHALLENGE_JS=1).
-    If shell/403/small DOM, Attempt 2: allow challenge, then persist cookies.
-    """
-    from playwright.sync_api import sync_playwright
-    import time as _time
+    t0 = time.perf_counter()
+    html = None
+    status = None
+    responses = []
 
-    def _attempt(allow_challenge: bool):
-        all_responses = []
-        waited_label = "domcontentloaded"
-        html, status = None, None
+    try:
         with sync_playwright() as pw:
-            browser = _launch_browser(pw)
-            context = _new_context(browser)
-            context = _maybe_load_cookies_into_context(context)
-            page = context.new_page()
+            ctx = _open_context(pw)
+            page = ctx.new_page()
+            page.on("response", lambda r: responses.append(r))
 
-            # optionally block Imperva challenge scripts
-            if not allow_challenge and PC_BLOCK_CHALLENGE_JS:
-                _wire_challenge_blocking(page)
+            # Warm-up: homepage (helps set cookie)
+            try:
+                page.goto("https://www.pokemoncenter.com/", wait_until="domcontentloaded", timeout=15000)
+                page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
 
-            page.on("response", lambda r: all_responses.append(r))
-            page.goto(url, wait_until="load", timeout=timeout_seconds * 1000)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # Cookie banner (best-effort)
-            for sel in [
-                'button:has-text("Accept All")',
-                'button:has-text("Accept all")',
-                'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]',
-                '[id*="onetrust-accept"]',
-            ]:
-                try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
-                        break
-                except Exception:
+            # Early 403 log
+            try:
+                if any((getattr(r, "status", None) or 0) == 403 for r in responses):
+                    print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
+            except Exception:
+                pass
+
+            # If we’re staring at the Imperva page, let the human solve it once
+            html_probe = page.content()
+            if _looks_like_incapsula_challenge(html_probe):
+                if _await_challenge_resolution(page):
+                    responses.clear()  # new cycle of requests after solve
+                    page.reload(wait_until="domcontentloaded")
+                else:
+                    # leave html as-is; small shell will be returned
                     pass
 
-            if PC_HEADED:
-                try:
-                    page.mouse.move(200, 200)
-                    page.mouse.wheel(0, 1000)
-                except Exception:
-                    pass
+            # Progressive scroll to fire lazy feeds
+            end = time.time() + 7
+            while time.time() < end:
+                try: page.mouse.wheel(0, 900)
+                except Exception: pass
+                page.wait_for_timeout(400)
 
+            # Let network settle
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
-                waited_label = "networkidle"
             except Exception:
-                try:
-                    page.mouse.wheel(0, 1600)
-                except Exception:
-                    pass
-                page.wait_for_timeout(1500)
-                waited_label = "fallback-wait"
+                page.wait_for_timeout(2000)
 
             html = page.content()
 
-            # Main status if possible
+            # Pick a plausible status
             status = 200
-            for r in all_responses:
+            for r in responses:
                 try:
                     if r.request.resource_type == "document" and "pokemoncenter.com" in r.url:
                         status = r.status
@@ -370,33 +426,24 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     continue
 
-            # Log any 403s
-            try:
-                if any(getattr(r, "status", 0) == 403 for r in all_responses):
-                    print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
-            except Exception:
-                pass
+            # Dump debug bundle
+            _pc_dump(_pc_slug(url), page, html or "", status, "waited=networkidle", responses)
 
-            # DEBUG DUMP
-            _pc_dump(
-                name=_pc_slug(url),
-                page=page,
-                html=html or "",
-                resp_status=status,
-                notes=f"waited={waited_label}",
-                responses=all_responses,
-            )
+            # Persist state if we got “real” HTML
+            if html and len(html) > 9000:
+                try: ctx.storage_state(path=STORAGE_STATE_PATH)
+                except Exception: pass
 
-            # Persist cookies if this looks like a real page (not tiny)
-            try:
-                if html and len(html) >= 9000:
-                    context.storage_state(path=STORAGE_STATE_PATH)
-            except Exception:
-                pass
+            _close_context(ctx)
 
-            context.close()
-            browser.close()
-        return html, status, waited_label, all_responses
+    except Exception as e:
+        print(f"[warn] Playwright fetch failed for {url}: {e}", file=sys.stderr)
+        return None, None, None
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    if len(html or "") < 9000:
+        print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
+    return html, status, elapsed_ms
 
     t0 = time.perf_counter()
     # Attempt 1: respect PC_BLOCK_CHALLENGE_JS setting
@@ -434,6 +481,59 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
         )
         source = "raw"
     return html, status, elapsed_ms, source
+
+def _looks_like_incapsula_challenge(page_html: str) -> bool:
+    low = (page_html or "").lower()
+    if "additional security check is required" in low: return True
+    if "hcaptcha" in low: return True
+    if "powered by imperva" in low: return True
+    return False
+
+def _await_challenge_resolution(page) -> bool:
+    """
+    If the Imperva page is shown, ask the human to solve it (only in headed mode).
+    Returns True if we think the challenge is cleared afterwards.
+    """
+    # quick probe for hCaptcha iframe or the blue banner text
+    has_iframe = page.locator('iframe[src*="hcaptcha"]').first
+    banner     = page.locator('text=Additional security check').first
+
+    if not (has_iframe.is_visible(timeout=500) or banner.is_visible(timeout=500)):
+        return False  # no obvious challenge elements
+
+    if not PC_HEADED:
+        print("[warn] Imperva challenge detected but PC_HEADED is off; cannot be solved automatically.", file=sys.stderr)
+        return False
+
+    print("[action] Imperva challenge detected. Please solve the checkbox in the visible window...", file=sys.stderr)
+
+    # Wait up to PC_CHALLENGE_TIMEOUT_S for the challenge to disappear and content to load.
+    deadline = time.time() + PC_CHALLENGE_TIMEOUT_S
+    solved = False
+    while time.time() < deadline:
+        try:
+            # Heuristics: hcaptcha iframe gone and we see non-trivial DOM
+            if not has_iframe.is_visible(timeout=500) and not banner.is_visible(timeout=2000):
+                # Give the site a moment to redirect / hydrate
+                page.wait_for_load_state("networkidle", timeout=5000)
+                html = page.content()
+                if len(html or "") > 9000 and ("product" in html or "category" in html):
+                    solved = True
+                    break
+        except Exception:
+            pass
+        page.wait_for_timeout(750)
+
+    if solved:
+        print("[info] Challenge cleared. Persisting cookies/state.", file=sys.stderr)
+        try:
+            page.context.storage_state(path=STORAGE_STATE_PATH)
+        except Exception:
+            pass
+    else:
+        print("[warn] Challenge not cleared in time.", file=sys.stderr)
+    return solved
+
 
 # =========================
 # Category link extractors
