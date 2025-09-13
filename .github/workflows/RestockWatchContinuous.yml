@@ -63,6 +63,7 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
           PC_HEADED: "1"
           DEBUG_PC_DUMP: "1"
+          PC_BLOCK_CHALLENGE_JS: "0"
         run: |
           while ($true) {
             Write-Host "=== $(Get-Date) ==="
