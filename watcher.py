@@ -12,6 +12,9 @@ from typing import List, Optional, Dict, Any
 import requests
 import yaml
 
+def _env_bool(name: str, default: str = "0") -> bool:
+    return (os.environ.get(name, default) or "").strip().lower() in ("1","true","yes","on")
+
 # Make Windows console happy for UTF-8 logs
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -29,22 +32,15 @@ PC_REAL_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
-
-PC_HEADED = os.environ.get("PC_HEADED", "").strip() == "1"
-PC_BLOCK_CHALLENGE_JS = os.environ.get("PC_BLOCK_CHALLENGE_JS", "1").strip() == "1"
-
-# Optional: path to storage state JSON exported from a real browser session
+PC_HEADED = _env_bool("PC_HEADED")
+PC_BLOCK_CHALLENGE_JS = _env_bool("PC_BLOCK_CHALLENGE_JS", "1")
+PC_USE_PERSISTENT = _env_bool("PC_USE_PERSISTENT")
+PC_REQUIRE_HUMAN = _env_bool("PC_REQUIRE_HUMAN")
 PC_STORAGE_STATE = os.environ.get("PC_STORAGE_STATE", "").strip()
-# Optional: raw JSON array of cookie dicts (or {"cookies":[...]})
 PC_COOKIES_JSON = os.environ.get("PC_COOKIES_JSON", "").strip()
-
-# Imperva / session handling (our own persistence)
-PC_USE_PERSISTENT = os.environ.get("PC_USE_PERSISTENT", "").strip() == "1"
 PC_USER_DATA_DIR = os.environ.get("PC_USER_DATA_DIR", "pc_debug/pw-profile")
 PC_CHALLENGE_TIMEOUT_S = int(os.environ.get("PC_CHALLENGE_TIMEOUT_S", "180"))
 STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
-
-# Extra “real-ish” headers inc. UA-CH (some botwalls check these)
 _PC_EXTRA_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -55,7 +51,6 @@ _PC_EXTRA_HEADERS = {
 }
 
 # Human bootstrap: open a visible window and wait for user to clear Imperva once
-PC_REQUIRE_HUMAN = os.environ.get("PC_REQUIRE_HUMAN", "").strip() == "1"
 PC_BOOT_URL = os.environ.get("PC_BOOT_URL", "https://www.pokemoncenter.com/")
 
 # Optionally launch a real installed browser channel ('chrome' or 'msedge') for higher trust
@@ -860,7 +855,7 @@ def safe_main():
         return
 
     label = "restockwatch"
-        # Try a one-time human bootstrap if requested
+    # Try a one-time human bootstrap if requested
     _human_bootstrap_once()
 
     # Ensure label exists (422 if already exists is fine)
