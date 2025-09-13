@@ -401,15 +401,25 @@ def safe_main():
             continue  # done with this category target
         # --- END category path ---
 
-        # Single product / general URL path
+    # --- END category path ---
+
+    # Decide fetch method
+    is_pc = "pokemoncenter.com" in (t.url or "")
+    if is_pc or (t.expand or "").lower() == "pc_category":
+        html, status, elapsed_ms = fetch_pc_rendered(
+            t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
+        )
+    else:
         html, status, elapsed_ms = fetch_html_with_retries(
             t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
         )
-        if html is None:
-            print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
-            continue
 
-        print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
+    if html is None:
+        print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
+        continue
+
+    print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
+    ...
 
         # Traffic spike heuristics
         is_high_status  = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
