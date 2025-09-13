@@ -355,7 +355,7 @@ if (t.expand or "").lower() == "pc_category":
 
         # Single product / general URL path
         html, status, elapsed_ms = fetch_html_with_retries(
-            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+        t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
         )
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
