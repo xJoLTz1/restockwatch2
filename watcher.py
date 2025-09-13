@@ -190,6 +190,25 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
     return html, status, elapsed_ms
 
+def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
+    """Use Playwright for Pokemon Center; otherwise plain requests."""
+    is_pc = "pokemoncenter.com" in (url or "")
+    if is_pc:
+        html, status, elapsed_ms = fetch_pc_rendered(url, ua=ua, timeout_seconds=timeout_seconds)
+        source = "rendered"
+        # If Playwright fails, fall back once to raw so we still log something
+        if html is None:
+            html, status, elapsed_ms = fetch_html_with_retries(
+                url, timeout=timeout_seconds, ua=ua, retries=2
+            )
+            source = "raw-fallback"
+    else:
+        html, status, elapsed_ms = fetch_html_with_retries(
+            url, timeout=timeout_seconds, ua=ua, retries=2
+        )
+        source = "raw"
+    return html, status, elapsed_ms, source
+
 # =========================
 # GitHub helpers
 # =========================
@@ -333,13 +352,16 @@ def safe_main():
 
         # --- Category expansion for Pokémon Center ---
         if (t.expand or "").lower() == "pc_category":
-            # Fetch category page once (simple GET; PC often hides products to bots, but we try)
-            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
-                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+            # Render the category page (PC needs JS)
+            cat_html, cat_status, cat_elapsed, cat_source = fetch_pc_or_raw(
+                t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
             )
             if cat_html is None:
                 print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
                 continue
+
+            print(f"[debug] {t.name} [category]: fetched {len(cat_html)} bytes in {cat_elapsed} ms "
+                  f"(status={cat_status}, source={cat_source}) from {t.url}")
 
             # Extract product links from the category page
             product_urls = extract_pc_product_links(cat_html, max_links=30)
@@ -356,16 +378,18 @@ def safe_main():
 
             print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
-            # Check each product page using the SAME parse rules from this target
+            # Check each product page (rendered for PC) using this target's parse rules
             in_stock_urls: List[str] = []
             for purl in product_urls:
-                p_html, p_status, p_elapsed = fetch_html_with_retries(
-                    purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+                p_html, p_status, p_elapsed, p_source = fetch_pc_or_raw(
+                    purl, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
                 )
                 if p_html is None:
                     continue
-                state = detect_stock(p_html, t)  # reuse this target's parse rules
-                if state is True:
+                st = detect_stock(p_html, t)
+                print(f"[debug] {t.name} product: detect_stock -> {st} "
+                      f"(len={len(p_html)}, ms={p_elapsed}, source={p_source}) {purl}")
+                if st is True:
                     in_stock_urls.append(purl)
 
             # === Aggregate issue logic: one issue if ANY are in stock ===
@@ -388,10 +412,8 @@ def safe_main():
                     open_issues = list_open_issues(repo, token, label=label)  # refresh to avoid dupes
                     print(f"[alert] opened aggregate IN-STOCK issue for {t.name}")
                 else:
-                    # Optional: PATCH body to update list (skipped to avoid noise)
                     print(f"[info] aggregate IN-STOCK issue already open for {t.name}")
             else:
-                # Nothing buyable right now — close aggregate if it exists
                 if existing_any:
                     close_issue(repo, token, existing_any["number"])
                     open_issues = list_open_issues(repo, token, label=label)
@@ -401,22 +423,16 @@ def safe_main():
             continue  # done with this category target
         # --- END category path ---
 
-        # Decide fetch method for single URLs
-        is_pc = "pokemoncenter.com" in (t.url or "")
-        if is_pc:
-            html, status, elapsed_ms = fetch_pc_rendered(
-                t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
-            )
-        else:
-            html, status, elapsed_ms = fetch_html_with_retries(
-                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-            )
-
+        # ----- Single product / general URL path -----
+        html, status, elapsed_ms, source = fetch_pc_or_raw(
+            t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
+        )
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
             continue
 
-        print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
+        print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms "
+              f"(status={status}, source={source}) from {t.url}")
 
         # Traffic spike heuristics
         is_high_status  = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
@@ -429,7 +445,8 @@ def safe_main():
                 f"Detected potential high traffic on: {t.name}\n\n"
                 f"URL: {t.url}\n"
                 f"HTTP status: {status}\n"
-                f"Latency: {elapsed_ms} ms\n\n"
+                f"Latency: {elapsed_ms} ms\n"
+                f"Source: {source}\n\n"
                 f"_(Auto by RestockWatch)_"
             )
             existing_traffic = find_issue_by_key(open_issues, traffic_key)
