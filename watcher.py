@@ -18,7 +18,9 @@ try:
 except Exception:
     pass
 
-# Where screenshots/html/json dumps go if DEBUG_PC_DUMP=1
+# ----------------------------------------------------------------------
+# Globals / env
+# ----------------------------------------------------------------------
 DEBUG_SHOTS_DIR = os.environ.get("PC_DEBUG_DIR", "pc_debug")
 os.makedirs(DEBUG_SHOTS_DIR, exist_ok=True)
 
@@ -28,7 +30,6 @@ PC_REAL_UA = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
-# --- Playwright env toggles / helpers -----------------------------------------
 PC_HEADED = os.environ.get("PC_HEADED", "").strip() == "1"
 PC_BLOCK_CHALLENGE_JS = os.environ.get("PC_BLOCK_CHALLENGE_JS", "1").strip() == "1"
 
@@ -37,17 +38,8 @@ PC_STORAGE_STATE = os.environ.get("PC_STORAGE_STATE", "").strip()
 # Optional: raw JSON array of cookie dicts (or {"cookies":[...]})
 PC_COOKIES_JSON = os.environ.get("PC_COOKIES_JSON", "").strip()
 
-def _launch_browser(pw):
-    """Single place to control headless/headed + common args."""
-    return pw.chromium.launch(
-        headless=not PC_HEADED,
-        args=[
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
-            "--no-sandbox",
-            "--disable-gpu",
-        ],
-    )
+# Persistent storage for cookies (our own) to survive restarts
+STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
 
 # Extra “real-ish” headers inc. UA-CH (some botwalls check these)
 _PC_EXTRA_HEADERS = {
@@ -59,93 +51,6 @@ _PC_EXTRA_HEADERS = {
     "sec-ch-ua-platform": '"Windows"',
     "sec-ch-ua-mobile": "?0",
 }
-
-def _maybe_load_cookies_into_context(context):
-    # Highest priority: full storage state file
-    if PC_STORAGE_STATE and os.path.isfile(PC_STORAGE_STATE):
-        try:
-            # Validate we can read it; then re-create context from storage state
-            context.storage_state(path=PC_STORAGE_STATE)
-            browser = context.browser
-            context.close()
-            return browser.new_context(storage_state=PC_STORAGE_STATE)
-        except Exception as e:
-            print(f"[warn] storage_state load failed: {e}", file=sys.stderr)
-
-    # Next: raw cookies JSON
-    if PC_COOKIES_JSON:
-        try:
-            import json as _json_local
-            cookies = _json_local.loads(PC_COOKIES_JSON)
-            if isinstance(cookies, dict) and "cookies" in cookies:
-                cookies = cookies["cookies"]
-            if isinstance(cookies, list) and cookies:
-                context.add_cookies(cookies)
-        except Exception as e:
-            print(f"[warn] cookie JSON load failed: {e}", file=sys.stderr)
-    return context
-
-def _build_context(pw):
-    ctx = _launch_browser(pw).new_context(
-        user_agent=PC_REAL_UA,
-        viewport={"width": 1366, "height": 900},
-        locale="en-US",
-        timezone_id="America/New_York",
-        java_script_enabled=True,
-        extra_http_headers=_PC_EXTRA_HEADERS,
-        device_scale_factor=1.0,
-        is_mobile=False,
-        has_touch=False,
-        bypass_csp=True,
-    )
-    # Basic stealth
-    ctx.add_init_script("""
-        Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
-        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-        // Plugin & mime spoof
-        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
-        Object.defineProperty(navigator, 'mimeTypes', { get: () => [1,2] });
-        // Permissions spoof
-        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
-        if (originalQuery) {
-          window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications'
-              ? Promise.resolve({ state: Notification.permission })
-              : originalQuery(parameters)
-          );
-        }
-    """)
-    ctx = _maybe_load_cookies_into_context(ctx)
-    return ctx
-
-def _wire_challenge_blocking(page):
-    if not PC_BLOCK_CHALLENGE_JS:
-        return
-
-    # Block Imperva/Incapsula challenge JS; allow everything else.
-    challenge_pat = re.compile(
-        r"/(vice-come-[A-Za-z0-9-]+|GEDIE-OF-MACBETH-[A-Za-z0-9-]+)\b", re.I
-    )
-
-    def _route_handler(route):
-        try:
-            req = route.request  # <-- property, not a function
-            url = getattr(req, "url", "")
-            if challenge_pat.search(url or ""):
-                print(f"[debug] blocking challenge script: {url}", file=sys.stderr)
-                return route.abort()
-            return route.continue_()
-        except Exception as e:
-            # Never let routing crash the page; let it through on errors.
-            print(f"[warn] route handler error: {e}", file=sys.stderr)
-            try:
-                return route.continue_()
-            except Exception:
-                pass
-
-    page.route("**/*", _route_handler)
 
 # --- Traffic/latency heuristics ----------------------------------------------
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
@@ -225,34 +130,8 @@ def load_config(path: str) -> Config:
     )
 
 # =========================
-# Scraping helpers
+# HTTP helpers
 # =========================
-
-def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
-    """
-    Scrape Pokémon Center product links from a category page (raw HTML).
-    Handles href, data-pdp-url, absolute URLs, and JSON-embedded strings.
-    """
-    patterns = [
-        r'href=[\'"](/product/[^\'"]+)[\'"]',
-        r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',
-        r'https?://www\.pokemoncenter\.com(/product/[^\'"]+)',
-        r'"pdpUrl"\s*:\s*"\s*(/product/[^"]+)"',
-        r'"url"\s*:\s*"\s*(/product/[^"]+)"',
-    ]
-
-    found: List[str] = []
-    seen = set()
-    for pat in patterns:
-        for m in re.findall(pat, html, flags=re.I):
-            path = m if m.startswith("/product/") else ("/" + m.lstrip("/"))
-            url = "https://www.pokemoncenter.com" + path.split("?")[0]
-            if url not in seen:
-                seen.add(url)
-                found.append(url)
-                if len(found) >= max_links:
-                    return found
-    return found
 
 def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
     headers = {
@@ -272,7 +151,10 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             time.sleep(1.0)
     return None, None, None
 
-# ---- Debug utilities for Playwright dumps ----
+# =========================
+# Playwright helpers / debug
+# =========================
+
 def _pc_slug(url: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", url.lower())
     return s.strip("-")[:120]
@@ -323,40 +205,125 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
     except Exception as e:
         print(f"[warn] debug info write failed: {e}", file=sys.stderr)
 
-# ---- Playwright render for a single URL (PC) ----
+# ---- Playwright context / routing -------------------------------------------
+
+def _launch_browser(pw):
+    """Single place to control headless/headed + common args."""
+    return pw.chromium.launch(
+        headless=not PC_HEADED,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--disable-gpu",
+        ],
+    )
+
+def _new_context(browser, *, extra_headers=None):
+    ctx = browser.new_context(
+        user_agent=PC_REAL_UA,
+        viewport={"width": 1366, "height": 900},
+        locale="en-US",
+        timezone_id="America/New_York",
+        java_script_enabled=True,
+        extra_http_headers=extra_headers or _PC_EXTRA_HEADERS,
+        device_scale_factor=1.0,
+        is_mobile=False,
+        has_touch=False,
+        bypass_csp=True,
+        storage_state=STORAGE_STATE_PATH if os.path.exists(STORAGE_STATE_PATH) else None,
+    )
+    ctx.add_init_script("""
+        Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+        window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
+        Object.defineProperty(navigator, 'mimeTypes', { get: () => [1,2] });
+        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
+        if (originalQuery) {
+          window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications'
+              ? Promise.resolve({ state: Notification.permission })
+              : originalQuery(parameters)
+          );
+        }
+    """)
+    return ctx
+
+def _maybe_load_cookies_into_context(context):
+    # Highest priority: full storage state file (user-provided)
+    if PC_STORAGE_STATE and os.path.isfile(PC_STORAGE_STATE):
+        try:
+            context.storage_state(path=PC_STORAGE_STATE)  # validate readable
+            browser = context.browser
+            context.close()
+            return browser.new_context(storage_state=PC_STORAGE_STATE)
+        except Exception as e:
+            print(f"[warn] storage_state load failed: {e}", file=sys.stderr)
+
+    # Next: raw cookies JSON
+    if PC_COOKIES_JSON:
+        try:
+            import json as _json_local
+            cookies = _json_local.loads(PC_COOKIES_JSON)
+            if isinstance(cookies, dict) and "cookies" in cookies:
+                cookies = cookies["cookies"]
+            if isinstance(cookies, list) and cookies:
+                context.add_cookies(cookies)
+        except Exception as e:
+            print(f"[warn] cookie JSON load failed: {e}", file=sys.stderr)
+    return context
+
+def _wire_challenge_blocking(page):
+    if not PC_BLOCK_CHALLENGE_JS:
+        return
+    challenge_pat = re.compile(r"/(vice-come-[A-Za-z0-9-]+|GEDIE-OF-MACBETH-[A-Za-z0-9-]+)\b", re.I)
+    def _route_handler(route):
+        try:
+            req = route.request
+            url = getattr(req, "url", "")
+            if challenge_pat.search(url or ""):
+                print(f"[debug] blocking challenge script: {url}", file=sys.stderr)
+                return route.abort()
+            return route.continue_()
+        except Exception as e:
+            print(f"[warn] route handler error: {e}", file=sys.stderr)
+            try:
+                return route.continue_()
+            except Exception:
+                pass
+    page.route("**/*", _route_handler)
+
+# =========================
+# PC fetchers (with retry)
+# =========================
+
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     """
-    Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
-    Dumps HTML/PNG/JSON XHRs to pc_debug/ when DEBUG_PC_DUMP=1.
+    Render Pokemon Center pages and return (html, status, elapsed_ms).
+    Attempt 1: (maybe) block Imperva JS (if PC_BLOCK_CHALLENGE_JS=1).
+    If shell/403/small DOM, Attempt 2: allow challenge, then persist cookies.
     """
     from playwright.sync_api import sync_playwright
     import time as _time
 
-    t0 = _time.perf_counter()
-    html = None
-    status = None
-    waited_label = "domcontentloaded"
-    all_responses = []
-
-    try:
+    def _attempt(allow_challenge: bool):
+        all_responses = []
+        waited_label = "domcontentloaded"
+        html, status = None, None
         with sync_playwright() as pw:
-            context = _build_context(pw)
+            browser = _launch_browser(pw)
+            context = _new_context(browser)
+            context = _maybe_load_cookies_into_context(context)
             page = context.new_page()
-            _wire_challenge_blocking(page)
 
-            main_response = None
-            def _resp(r):
-                nonlocal main_response, all_responses
-                all_responses.append(r)
-                if r.url.split("#")[0] == url.split("#")[0] and main_response is None:
-                    main_response = r
-            page.on("response", _resp)
+            # optionally block Imperva challenge scripts
+            if not allow_challenge and PC_BLOCK_CHALLENGE_JS:
+                _wire_challenge_blocking(page)
 
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
-
-            # --- Log 403s early (from any response we saw up to now)
-            if any((getattr(r, "status", None) or 0) == 403 for r in all_responses):
-                print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
+            page.on("response", lambda r: all_responses.append(r))
+            page.goto(url, wait_until="load", timeout=timeout_seconds * 1000)
 
             # Cookie banner (best-effort)
             for sel in [
@@ -373,7 +340,6 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     pass
 
-            # Human-ish nudge if headed (helps some bot checks)
             if PC_HEADED:
                 try:
                     page.mouse.move(200, 200)
@@ -381,23 +347,37 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     pass
 
-            # Let XHRs finish
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
                 waited_label = "networkidle"
             except Exception:
-                try: page.mouse.wheel(0, 1600)
-                except Exception: pass
-                page.wait_for_timeout(2000)
+                try:
+                    page.mouse.wheel(0, 1600)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
                 waited_label = "fallback-wait"
 
-            if len((page.content() or "")) < 4000:
-                page.wait_for_timeout(1500)
-
             html = page.content()
-            status = main_response.status if main_response else 200
 
-            # Dump artifacts
+            # Main status if possible
+            status = 200
+            for r in all_responses:
+                try:
+                    if r.request.resource_type == "document" and "pokemoncenter.com" in r.url:
+                        status = r.status
+                        break
+                except Exception:
+                    continue
+
+            # Log any 403s
+            try:
+                if any(getattr(r, "status", 0) == 403 for r in all_responses):
+                    print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
+            except Exception:
+                pass
+
+            # DEBUG DUMP
             _pc_dump(
                 name=_pc_slug(url),
                 page=page,
@@ -407,14 +387,32 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 responses=all_responses,
             )
 
+            # Persist cookies if this looks like a real page (not tiny)
+            try:
+                if html and len(html) >= 9000:
+                    context.storage_state(path=STORAGE_STATE_PATH)
+            except Exception:
+                pass
+
             context.close()
+            browser.close()
+        return html, status, waited_label, all_responses
 
-    except Exception as e:
-        print(f"[warn] Playwright fetch failed for {url}: {e}", file=sys.stderr)
-        return None, None, None
+    t0 = time.perf_counter()
+    # Attempt 1: respect PC_BLOCK_CHALLENGE_JS setting
+    html, status, waited, resps = _attempt(allow_challenge=False)
+    small = len(html or "") < 9000
+    try:
+        saw_403 = any(getattr(r, "status", 0) == 403 for r in resps)
+    except Exception:
+        saw_403 = False
 
-    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-    if len(html or "") < 5000:
+    # If shell/403/small, Attempt 2: allow challenge
+    if small or saw_403:
+        html, status, waited, resps = _attempt(allow_challenge=True)
+
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    if len(html or "") < 9000:
         print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
 
     return html, status, elapsed_ms
@@ -437,17 +435,46 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
         source = "raw"
     return html, status, elapsed_ms, source
 
+# =========================
+# Category link extractors
+# =========================
+
+def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
+    """
+    Scrape Pokémon Center product links from rendered HTML.
+    Handles href, data-pdp-url, absolute URLs, and JSON-embedded strings.
+    """
+    patterns = [
+        r'href=[\'"](/product/[^\'"]+)[\'"]',
+        r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',
+        r'https?://www\.pokemoncenter\.com(/product/[^\'"]+)',
+        r'"pdpUrl"\s*:\s*"\s*(/product/[^"]+)"',
+        r'"url"\s*:\s*"\s*(/product/[^"]+)"',
+    ]
+    found: List[str] = []
+    seen = set()
+    for pat in patterns:
+        for m in re.findall(pat, html or "", flags=re.I):
+            path = m if m.startswith("/product/") else ("/" + m.lstrip("/"))
+            url = "https://www.pokemoncenter.com" + path.split("?")[0]
+            if url not in seen:
+                seen.add(url)
+                found.append(url)
+                if len(found) >= max_links:
+                    return found
+    return found
+
 def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, max_links: int = 60) -> List[str]:
     """
     Open a Pokémon Center *category* URL in Playwright and capture product URLs
     by scanning the *network responses* (JSON/JS/HTML) for '/product/...' paths.
+    Two attempts: 1) possibly blocking challenge; 2) always allowing challenge.
     """
     from playwright.sync_api import sync_playwright
 
     base = "https://www.pokemoncenter.com"
     links: List[str] = []
     seen = set()
-    all_responses = []
 
     def _maybe_add(pathish: Optional[str]):
         if not pathish:
@@ -462,69 +489,70 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
             seen.add(full)
             links.append(full)
 
-    try:
-        with sync_playwright() as pw:
-            context = _build_context(pw)
-            page = context.new_page()
-            _wire_challenge_blocking(page)
+    for attempt in (1, 2):
+        try:
+            with sync_playwright() as pw:
+                browser = _launch_browser(pw)
+                context = _new_context(browser)
+                context = _maybe_load_cookies_into_context(context)
+                page = context.new_page()
 
-            def on_response(resp):
+                if attempt == 1 and PC_BLOCK_CHALLENGE_JS:
+                    _wire_challenge_blocking(page)
+
+                def on_response(resp):
+                    try:
+                        url_l = resp.url.lower()
+                        if "pokemoncenter.com" not in url_l:
+                            return
+                        ct = (resp.headers or {}).get("content-type", "").lower()
+                        if not any(k in ct for k in ("json", "javascript", "html")):
+                            return
+                        body = resp.text()
+                        for m in re.findall(r'(?:"|\')(/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
+                            _maybe_add(m)
+                        for m in re.findall(r'(?:"|\')(https://www\.pokemoncenter\.com/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
+                            _maybe_add(m)
+                    except Exception:
+                        pass
+
+                page.on("response", on_response)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+
+                # Cookie banner (best-effort)
+                for sel in [
+                    'button:has-text("Accept All")',
+                    'button:has-text("Accept Cookies")',
+                    '[data-testid="cookie-accept-all"]',
+                    '[id*="onetrust-accept"]',
+                ]:
+                    try:
+                        if page.is_visible(sel, timeout=500):
+                            page.click(sel, timeout=500)
+                            break
+                    except Exception:
+                        pass
+
+                if PC_HEADED:
+                    try:
+                        page.mouse.move(300, 300)
+                        page.mouse.wheel(0, 1200)
+                    except Exception:
+                        pass
+
                 try:
-                    all_responses.append(resp)
-                    url_l = resp.url.lower()
-                    if "pokemoncenter.com" not in url_l:
-                        return
-                    ct = (resp.headers or {}).get("content-type", "").lower()
-                    if not any(k in ct for k in ("json", "javascript", "html")):
-                        return
-                    body = resp.text()
-                    for m in re.findall(r'(?:"|\')(/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
-                        _maybe_add(m)
-                    for m in re.findall(r'(?:"|\')(https://www\.pokemoncenter\.com/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
-                        _maybe_add(m)
+                    page.wait_for_load_state("networkidle", timeout=8000)
                 except Exception:
-                    pass
+                    page.wait_for_timeout(2500)
 
-            page.on("response", on_response)
+                context.close()
+                browser.close()
 
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
-
-            # --- Log 403s early
-            if any((getattr(r, "status", None) or 0) == 403 for r in all_responses):
-                print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
-
-            # Cookie banner (best-effort)
-            for sel in [
-                'button:has-text("Accept All")',
-                'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]',
-                '[id*="onetrust-accept"]',
-            ]:
-                try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
-                        break
-                except Exception:
-                    pass
-
-            # Human-ish moves help sometimes
-            if PC_HEADED:
-                try:
-                    page.mouse.move(300, 300)
-                    page.mouse.wheel(0, 1200)
-                except Exception:
-                    pass
-
-            # Prefer networkidle to let feeds land
-            try:
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                page.wait_for_timeout(2500)
-
-            context.close()
-
-    except Exception as e:
-        print(f"[warn] Network link extraction failed for {url}: {e}", file=sys.stderr)
+            if links:
+                break
+        except Exception as e:
+            print(f"[warn] Network link extraction failed (attempt {attempt}) for {url}: {e}", file=sys.stderr)
+            continue
 
     if len(links) > max_links:
         links = links[:max_links]
@@ -533,13 +561,13 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
 def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
     """
     Simple DOM fallback: look for anchors or data-pdp-url in hydrated DOM.
+    Two attempts: 1) possibly blocking challenge; 2) always allowing challenge.
     """
     from playwright.sync_api import sync_playwright
 
     base = "https://www.pokemoncenter.com"
     links: List[str] = []
     seen = set()
-    all_responses = []
 
     def _norm(h: Optional[str]) -> Optional[str]:
         if not h:
@@ -551,50 +579,66 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
             return h.split("?")[0]
         return None
 
-    try:
-        with sync_playwright() as pw:
-            context = _build_context(pw)
-            page = context.new_page()
-            _wire_challenge_blocking(page)
+    for attempt in (1, 2):
+        try:
+            with sync_playwright() as pw:
+                browser = _launch_browser(pw)
+                context = _new_context(browser)
+                context = _maybe_load_cookies_into_context(context)
+                page = context.new_page()
 
-            page.on("response", lambda r: all_responses.append(r))
+                if attempt == 1 and PC_BLOCK_CHALLENGE_JS:
+                    _wire_challenge_blocking(page)
 
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+                all_responses = []
+                page.on("response", lambda r: all_responses.append(r))
 
-            # --- Log 403s early
-            if any((getattr(r, "status", None) or 0) == 403 for r in all_responses):
-                print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # Cookie accept best-effort
-            for sel in [
-                'button:has-text("Accept All")', 'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]', '[id*="onetrust-accept"]'
-            ]:
+                # --- Log 403s early
                 try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
-                        break
+                    if any((getattr(r, "status", 0) == 403) for r in all_responses):
+                        print(f"[warn] 403 seen on PC while loading {url}", file=sys.stderr)
                 except Exception:
                     pass
 
-            try:
-                page.wait_for_load_state("networkidle", timeout=6000)
-            except Exception:
-                page.wait_for_timeout(2000)
+                # Cookie accept best-effort
+                for sel in [
+                    'button:has-text("Accept All")',
+                    'button:has-text("Accept Cookies")',
+                    '[data-testid="cookie-accept-all"]',
+                    '[id*="onetrust-accept"]'
+                ]:
+                    try:
+                        if page.is_visible(sel, timeout=500):
+                            page.click(sel, timeout=500)
+                            break
+                    except Exception:
+                        pass
 
-            hrefs = page.eval_on_selector_all(
-                'a[href*="/product/"], [data-pdp-url]',
-                '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
-            ) or []
-            for h in hrefs:
-                u = _norm(h)
-                if u and u not in seen:
-                    seen.add(u)
-                    links.append(u)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=6000)
+                except Exception:
+                    page.wait_for_timeout(2000)
 
-            context.close()
-    except Exception as e:
-        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
+                hrefs = page.eval_on_selector_all(
+                    'a[href*="/product/"], [data-pdp-url]',
+                    '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
+                ) or []
+                for h in hrefs:
+                    u = _norm(h)
+                    if u and u not in seen:
+                        seen.add(u)
+                        links.append(u)
+
+                context.close()
+                browser.close()
+
+            if links:
+                break
+        except Exception as e:
+            print(f"[warn] DOM link extraction failed (attempt {attempt}) for {url}: {e}", file=sys.stderr)
+            continue
 
     return links
 
@@ -684,36 +728,6 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
     return None
 
 # =========================
-# Push helpers
-# =========================
-
-def maybe_send_pushover(token: Optional[str], user: Optional[str], title: str, message: str, url: Optional[str] = None):
-    if not token or not user:
-        return
-    data = {"token": token, "user": user, "title": title, "message": message}
-    if url:
-        data["url"] = url
-    try:
-        requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
-    except Exception as e:
-        print(f"[warn] pushover failed: {e}", file=sys.stderr)
-
-def maybe_send_telegram(bot_token: Optional[str], chat_id: Optional[str], title: str, message: str, url: Optional[str] = None):
-    if not bot_token or not chat_id:
-        return
-    text = f"*{title}*\n{message}"
-    if url:
-        text += f"\n{url}"
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=15,
-        )
-    except Exception as e:
-        print(f"[warn] telegram failed: {e}", file=sys.stderr)
-
-# =========================
 # Main loop
 # =========================
 
@@ -741,7 +755,7 @@ def safe_main():
 
         # --- Category expansion for Pokémon Center ---
         if (t.expand or "").lower() == "pc_category":
-            # Render the category page (PC needs JS)
+            # Render category (PC needs JS)
             cat_html, cat_status, cat_elapsed, cat_source = fetch_pc_or_raw(
                 t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
             )
@@ -754,16 +768,14 @@ def safe_main():
                 f"(status={cat_status}, source={cat_source}) from {t.url}"
             )
 
-            # --- Extract product links from network (best) then fall back ---
+            # Extract product links from network (best), fallback to DOM, then HTML scan
             product_urls = collect_pc_product_links_with_network(
                 t.url, timeout_seconds=cfg.timeout_seconds, max_links=60
             )
-
             if not product_urls:
                 product_urls = extract_pc_links_from_dom_with_playwright(
                     t.url, timeout_seconds=cfg.timeout_seconds
                 )
-
             if not product_urls:
                 product_urls = extract_pc_product_links(cat_html, max_links=30)
 
