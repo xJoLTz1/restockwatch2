@@ -150,13 +150,76 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
     return None, None, None
 
 # ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
+import pathlib, json as _json
+from datetime import datetime
+
+def _pc_slug(url: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", url.lower())
+    return s.strip("-")[:120]
+
+def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str, responses: list):
+    """Write HTML, PNG, and a small info.json (plus XHR bodies) when DEBUG_PC_DUMP=1."""
+    if os.environ.get("DEBUG_PC_DUMP") != "1":
+        return
+
+    outdir = pathlib.Path("pc_debug")
+    outdir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    base = outdir / f"{ts}-{name}"
+
+    # html & screenshot
+    try:
+        (base.with_suffix(".html")).write_text(html or "", encoding="utf-8")
+    except Exception as e:
+        print(f"[warn] debug html write failed: {e}", file=sys.stderr)
+
+    try:
+        page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+    except Exception as e:
+        print(f"[warn] debug screenshot failed: {e}", file=sys.stderr)
+
+    # collect light-weight response metadata + save JSON bodies
+    info = {
+        "status": resp_status,
+        "notes": notes,
+        "responses": [],
+    }
+    for r in responses:
+        try:
+            ctype = (r.headers.get("content-type") or "").lower()
+            rec = {"url": r.url, "status": r.status, "content_type": ctype}
+            info["responses"].append(rec)
+
+            # Save JSON bodies (useful to spot the data feed)
+            if "application/json" in ctype:
+                body = r.text()  # Playwright Response.text() is sync in Python
+                # short-circuit large blobs
+                if body and len(body) < 2_000_000:
+                    jname = outdir / f"{ts}-{name}-{_pc_slug(r.url)}.json"
+                    jname.write_text(body, encoding="utf-8")
+        except Exception:
+            continue
+
+    try:
+        (base.with_suffix(".info.json")).write_text(_json.dumps(info, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[warn] debug info write failed: {e}", file=sys.stderr)
+
+# ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
+    """
+    Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
+    Dumps HTML/PNG/JSON XHRs to pc_debug/ when DEBUG_PC_DUMP=1.
+    """
     from playwright.sync_api import sync_playwright
     import time as _time
 
     t0 = _time.perf_counter()
     html = None
     status = None
+    waited_label = "domcontentloaded"
+    all_responses = []
+
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
@@ -187,16 +250,18 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             """)
 
             page = context.new_page()
+
             main_response = None
             def _resp(r):
-                nonlocal main_response
+                nonlocal main_response, all_responses
+                all_responses.append(r)
                 if r.url.split("#")[0] == url.split("#")[0] and main_response is None:
                     main_response = r
             page.on("response", _resp)
 
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # cookie accept (best-effort)
+            # Cookie banner (best-effort)
             for sel in [
                 'button:has-text("Accept All")',
                 'button:has-text("Accept all")',
@@ -211,25 +276,46 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     pass
 
-            # nudge + settle
-            try: page.mouse.wheel(0, 1200)
-            except Exception: pass
-            try: page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception: page.wait_for_timeout(2500)
+            # Try to let XHRs finish
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
+                waited_label = "networkidle"
+            except Exception:
+                # Scroll / jitter to trigger lazy loads, then a short wait
+                try: page.mouse.wheel(0, 1600)
+                except Exception: pass
+                page.wait_for_timeout(2000)
+                waited_label = "fallback-wait"
 
-            # get content & dump
+            # One more small grace period if the DOM still looks tiny
+            if len((page.content() or "")) < 4000:
+                page.wait_for_timeout(1500)
+
             html = page.content()
             status = main_response.status if main_response else 200
-            dump_debug_artifacts("rendered", url, html=html, page=page,
-                                 note=f"status={status}, waited=networkidle")
+
+            # DEBUG DUMP
+            _pc_dump(
+                name=_pc_slug(url),
+                page=page,
+                html=html or "",
+                resp_status=status,
+                notes=f"waited={waited_label}",
+                responses=all_responses,
+            )
 
             context.close()
             browser.close()
+
     except Exception as e:
         print(f"[warn] Playwright fetch failed for {url}: {e}", file=sys.stderr)
         return None, None, None
 
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    # Helpful log if it still looks like a shell
+    if len(html or "") < 5000:
+        print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
+
     return html, status, elapsed_ms
 
 def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
