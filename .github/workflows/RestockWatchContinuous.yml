@@ -16,42 +16,42 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 4320
 
-    # 👉 Set ONE of these to the path you installed above.
+    # Use Windows PowerShell for all steps in this job
+    defaults:
+      run:
+        shell: powershell
+
     env:
+      # Update this if your Python lives elsewhere
       PYPATH: C:\Program Files\Python311\python.exe
+      # Persist browsers between runs (optional but nice for speed)
+      PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Verify Python exists (fail fast)
-        shell: powershell
+      - name: Verify Python
         run: |
           if (-not (Test-Path "${env:PYPATH}")) {
-            Write-Error "Python not found at ${env:PYPATH}. Install it machine-wide or update PYPATH."
+            Write-Error "Python not found at ${env:PYPATH}. Update PYPATH in workflow env."
             exit 1
           }
           & "${env:PYPATH}" -V
 
-      - name: Install deps
-        shell: powershell
+      - name: Upgrade pip + install deps
         run: |
           & "${env:PYPATH}" -m pip install --upgrade pip
           & "${env:PYPATH}" -m pip install -r requirements.txt
+          # Playwright Python package
+          & "${env:PYPATH}" -m pip install playwright
 
-      - name: Install Playwright browsers
-        shell: pwsh
+      - name: Install Playwright browsers (Chromium)
         run: |
+          New-Item -ItemType Directory -Force -Path "${env:PLAYWRIGHT_BROWSERS_PATH}" | Out-Null
           & "${env:PYPATH}" -m playwright install chromium
 
-      - name: Verify Playwright
-        shell: pwsh
-        run: |
-          & "${env:PYPATH}" -c "import playwright.sync_api as p; print('playwright ok')"
-
-
       - name: Loop every 60s
-        shell: powershell
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
