@@ -15,6 +15,9 @@ try:
 except Exception:
     pass
 
+DEBUG_SHOTS_DIR = os.environ.get("PC_DEBUG_DIR", "pc_debug")
+os.makedirs(DEBUG_SHOTS_DIR, exist_ok=True)
+
 PC_REAL_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -150,14 +153,17 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     """
     Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
-    Uses stronger waits and light stealth to avoid the JS shell.
+    Uses stronger waits, realistic client hints, deep scroll, and light stealth.
+    Saves a screenshot/HTML when hydration likely failed for easier debugging.
     """
     from playwright.sync_api import sync_playwright
     import time as _time
+    import pathlib
 
     t0 = _time.perf_counter()
     html = None
     status = None
+
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
@@ -166,6 +172,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-gpu",
+                    "--window-size=1366,900",
                 ],
             )
             context = browser.new_context(
@@ -174,17 +181,30 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 locale="en-US",
                 timezone_id="America/New_York",
                 java_script_enabled=True,
+                bypass_csp=True,
                 extra_http_headers={
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    # Realistic navigation headers + client hints
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
                     "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    'sec-ch-ua': '"Chromium";v="126", "Not(A:Brand";v="99"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
                 },
             )
+            # Mild stealth
             context.add_init_script("""
                 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
                 window.chrome = { runtime: {} };
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
                 Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                try { Object.defineProperty(Notification,'permission',{get:()=> 'default'}) } catch(e){}
             """)
 
             page = context.new_page()
@@ -197,37 +217,63 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
 
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # Best-effort cookies
-            for sel in [
-                'button:has-text("Accept All")',
-                'button:has-text("Accept all")',
-                'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]',
-                '[id*="onetrust-accept"]',
-            ]:
+            # Accept cookies (best effort)
+            for sel in ['button:has-text("Accept All")',
+                        'button:has-text("Accept all")',
+                        'button:has-text("Accept Cookies")',
+                        '[data-testid="cookie-accept-all"]',
+                        '[id*="onetrust-accept"]']:
                 try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
+                    if page.is_visible(sel, timeout=600):
+                        page.click(sel, timeout=600)
                         break
                 except Exception:
                     pass
 
-            # Nudge + longer stabilization
+            # Deep scroll to trigger lazy hydration
             try:
-                page.mouse.wheel(0, 1200)
+                for _ in range(8):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(450)
             except Exception:
                 pass
-            try:
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                page.wait_for_timeout(2500)
 
-            # If still looks empty, give it one more small wait
-            if len((page.content() or "")) < 4000:
-                page.wait_for_timeout(1500)
+            # Give network requests time to finish
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                page.wait_for_timeout(3000)
+
+            # If still tiny, try one more slow scroll + wait
+            content_len = len(page.content() or "")
+            if content_len < 4000:
+                for _ in range(4):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(600)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=6000)
+                except Exception:
+                    page.wait_for_timeout(2000)
 
             html = page.content()
             status = main_response.status if main_response else 200
+
+            # Debug snapshot if likely JS shell
+            if len(html or "") < 4000:
+                stamp = str(int(_time.time()*1000))
+                safe = re.sub(r'[^a-z0-9]+','_', url.split("://",1)[-1].lower())
+                png_path = pathlib.Path(DEBUG_SHOTS_DIR) / f"{stamp}_{safe}.png"
+                html_path = pathlib.Path(DEBUG_SHOTS_DIR) / f"{stamp}_{safe}.html"
+                try:
+                    page.screenshot(path=str(png_path), full_page=True)
+                except Exception:
+                    pass
+                try:
+                    with open(html_path, "w", encoding="utf-8") as fh:
+                        fh.write(html or "")
+                except Exception:
+                    pass
+                print(f"[info] PC likely JS shell ({len(html)} bytes). Saved {png_path.name} and {html_path.name}", file=sys.stderr)
 
             context.close()
             browser.close()
@@ -260,10 +306,13 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
     """
     Re-render a category URL and pull product links using multiple strategies:
       1) JSON-LD itemListElement
-      2) Anchors/data-pdp-url in hydrated DOM
-      3) Quick View modal: if 'Add to Cart' is visible, record its PDP link or tile link
+      2) Anchors / data-pdp-url in hydrated DOM
+      3) Regex over fully rendered HTML as a last resort
+      4) Quick View probing on a few tiles (to catch 'Add to Cart' products)
     """
     from playwright.sync_api import sync_playwright
+    import re as _re
+
     links: List[str] = []
     base = "https://www.pokemoncenter.com"
 
@@ -281,7 +330,7 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
+                args=["--disable-blink-features=AutomationControlled","--no-sandbox","--disable-gpu"],
             )
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
@@ -289,47 +338,55 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                 locale="en-US",
                 timezone_id="America/New_York",
                 java_script_enabled=True,
+                extra_http_headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Upgrade-Insecure-Requests": "1",
+                    'sec-ch-ua': '"Chromium";v="126", "Not(A:Brand";v="99"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
+                },
             )
             context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
             # Accept cookies (best-effort)
-            for sel in [
-                'button:has-text("Accept All")', 'button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]', '[id*="onetrust-accept"]'
-            ]:
+            for sel in ['button:has-text("Accept All")','button:has-text("Accept Cookies")',
+                        '[data-testid="cookie-accept-all"]','[id*="onetrust-accept"]']:
                 try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
+                    if page.is_visible(sel, timeout=600):
+                        page.click(sel, timeout=600)
                         break
                 except Exception:
                     pass
 
-            # Stabilize
+            # Deep scroll + settle
             try:
-                page.mouse.wheel(0, 1200)
+                for _ in range(8):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(450)
             except Exception:
                 pass
             try:
-                page.wait_for_load_state("networkidle", timeout=6000)
+                page.wait_for_load_state("networkidle", timeout=9000)
             except Exception:
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(2500)
 
-            # --- (1) JSON-LD list
+            # (1) JSON-LD
             try:
                 jsonlds = page.eval_on_selector_all(
-                    'script[type="application/ld+json"]',
-                    'els => els.map(e=>e.textContent)'
+                    'script[type="application/ld+json"]', 'els => els.map(e=>e.textContent)'
                 )
                 for raw in (jsonlds or []):
+                    import json as _json
                     try:
-                        import json
-                        data = json.loads(raw)
+                        data = _json.loads(raw)
                         items = []
                         if isinstance(data, dict) and "itemListElement" in data:
                             items = data["itemListElement"]
-                        if isinstance(data, list):
+                        elif isinstance(data, list):
                             for d in data:
                                 if isinstance(d, dict) and "itemListElement" in d:
                                     items += d["itemListElement"]
@@ -341,53 +398,53 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                             if norm and norm not in links:
                                 links.append(norm)
                     except Exception:
-                        continue
+                        pass
             except Exception:
                 pass
 
-            # --- (2) Anchors / data-pdp-url in DOM
-            if not links:
-                hrefs = page.eval_on_selector_all(
-                    'a[href*="/product/"], [data-pdp-url]',
-                    '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
-                ) or []
-                for h in hrefs:
-                    norm = _normalize(h)
-                    if norm and norm not in links:
-                        links.append(norm)
+            # (2) Anchors / data-pdp-url
+            hrefs = page.eval_on_selector_all(
+                'a[href*="/product/"], [data-pdp-url]',
+                '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
+            ) or []
+            for h in hrefs:
+                norm = _normalize(h)
+                if norm and norm not in links:
+                    links.append(norm)
 
-            # --- (3) Quick View probing (limited to first ~6 tiles)
+            # (3) Regex over rendered HTML (handles cases where anchors aren't in DOM tree)
+            html = page.content() or ""
+            for m in _re.findall(r'href=[\'"](/product/[^\'"#?]+)', html, flags=_re.I):
+                norm = _normalize(m)
+                if norm and norm not in links:
+                    links.append(norm)
+            for m in _re.findall(r'data-pdp-url=[\'"](/product/[^\'"#?]+)', html, flags=_re.I):
+                norm = _normalize(m)
+                if norm and norm not in links:
+                    links.append(norm)
+
+            # (4) Try a few Quick View modals
             if not links:
-                tiles = page.query_selector_all('button:has-text("Quick View"), [data-testid="quick-view"]')
-                tiles = tiles[:6]  # keep it light
+                tiles = page.query_selector_all('button:has-text("Quick View"), [data-testid="quick-view"]')[:6]
                 for btn in tiles:
                     try:
                         btn.click(timeout=1500)
-                        # wait for modal
                         page.wait_for_selector('div[role="dialog"], [data-testid*="modal"]', timeout=2000)
-                        # check availability text
-                        txt = (page.inner_text('div[role="dialog"], [data-testid*="modal"]') or "").lower()
-                        if ("add to cart" in txt or "add to bag" in txt) and ("unavailable" not in txt):
-                            # Try to find a link inside the modal, else fall back: record the page URL
-                            modal_href = None
-                            try:
-                                modal_href = page.get_attribute('div[role="dialog"] a[href*="/product/"]', "href")
-                            except Exception:
-                                pass
-                            norm = _normalize(modal_href) or url  # last resort
-                            if norm and norm not in links:
-                                links.append(norm)
+                        # link inside modal?
+                        modal_href = page.get_attribute('div[role="dialog"] a[href*="/product/"]', "href")
+                        norm = _normalize(modal_href)
+                        if norm and norm not in links:
+                            links.append(norm)
                     except Exception:
                         pass
                     finally:
-                        # close the modal
-                        try:
-                            for sel in ['button:has-text("Close")', '[aria-label="Close"]', 'button[title="Close"]']:
+                        for sel in ['button:has-text("Close")', '[aria-label="Close"]', 'button[title="Close"]']:
+                            try:
                                 if page.is_visible(sel, timeout=300):
                                     page.click(sel, timeout=300)
                                     break
-                        except Exception:
-                            pass
+                            except Exception:
+                                pass
 
             context.close()
             browser.close()
