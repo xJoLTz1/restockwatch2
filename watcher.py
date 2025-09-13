@@ -336,26 +336,38 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
         source = "raw"
     return html, status, elapsed_ms, source
 
-def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
+def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, max_links: int = 60) -> List[str]:
+    """
+    Open a Pokémon Center *category* URL in Playwright and capture product URLs
+    by scanning the *network responses* (JSON/JS/HTML) for '/product/...' paths.
+    This bypasses Incapsula's JS shell and 'Quick View' tiles entirely.
+    """
     from playwright.sync_api import sync_playwright
-    links: List[str] = []
-    base = "https://www.pokemoncenter.com"
+    import time as _time
 
-    def _normalize(h: Optional[str]) -> Optional[str]:
-        if not h:
-            return None
-        h = h.strip()
-        if h.startswith("/product/"):
-            return base + h.split("?")[0]
-        if h.startswith("https://www.pokemoncenter.com/product/"):
-            return h.split("?")[0]
-        return None
+    base = "https://www.pokemoncenter.com"
+    links: List[str] = []
+    seen = set()
+
+    def _maybe_add(pathish: Optional[str]):
+        if not pathish:
+            return
+        # normalize to absolute product URL
+        if pathish.startswith("/product/"):
+            full = base + pathish.split("?")[0]
+        elif pathish.startswith(base + "/product/"):
+            full = pathish.split("?")[0]
+        else:
+            return
+        if full not in seen:
+            seen.add(full)
+            links.append(full)
 
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled","--no-sandbox","--disable-gpu"],
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
             )
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
@@ -363,15 +375,53 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                 locale="en-US",
                 timezone_id="America/New_York",
                 java_script_enabled=True,
+                extra_http_headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Upgrade-Insecure-Requests": "1",
+                },
             )
-            context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            context.add_init_script("""
+                Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            """)
+
             page = context.new_page()
+
+            # Capture response bodies and scan for '/product/...' paths
+            def on_response(resp):
+                try:
+                    url_l = resp.url.lower()
+                    # Only look at PC responses (skip fonts, 3rd party, etc.)
+                    if "pokemoncenter.com" not in url_l:
+                        return
+                    ct = (resp.headers or {}).get("content-type", "").lower()
+                    if not any(k in ct for k in ("json", "javascript", "html")):
+                        return
+                    # Read body as text and scan for product paths
+                    body = resp.text()
+                    for m in re.findall(r'(?:"|\')(/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
+                        _maybe_add(m)
+                    # Some feeds use absolute URLs; catch those too
+                    for m in re.findall(r'(?:"|\')(https://www\.pokemoncenter\.com/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
+                        _maybe_add(m)
+                except Exception:
+                    # Never let response parsing kill the run
+                    pass
+
+            page.on("response", on_response)
+
+            # Navigate and let all network calls happen
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-            # cookie accept
+            # Cookie banner (best-effort)
             for sel in [
-                'button:has-text("Accept All")','button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]','[id*="onetrust-accept"]'
+                'button:has-text("Accept All")',
+                'button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]',
+                '[id*="onetrust-accept"]',
             ]:
                 try:
                     if page.is_visible(sel, timeout=500):
@@ -380,83 +430,25 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                 except Exception:
                     pass
 
-            # settle
-            try: page.mouse.wheel(0, 1200)
+            # Scroll + settle; PC often fires data calls after first paint
+            try: page.mouse.wheel(0, 1600)
             except Exception: pass
-            try: page.wait_for_load_state("networkidle", timeout=6000)
-            except Exception: page.wait_for_timeout(2000)
 
-            # dump what we got (helps confirm if we’re stuck in a JS shell)
-            html_now = page.content()
-            dump_debug_artifacts("category", url, html=html_now, page=page)
-
-            # (1) JSON-LD list
+            # Give the feed calls time to complete; prefer networkidle
             try:
-                jsonlds = page.eval_on_selector_all(
-                    'script[type="application/ld+json"]',
-                    'els => els.map(e=>e.textContent)'
-                )
-                for raw in (jsonlds or []):
-                    try:
-                        import json
-                        data = json.loads(raw)
-                        items = []
-                        if isinstance(data, dict) and "itemListElement" in data:
-                            items = data["itemListElement"]
-                        if isinstance(data, list):
-                            for d in data:
-                                if isinstance(d, dict) and "itemListElement" in d:
-                                    items += d["itemListElement"]
-                        for it in items:
-                            url_field = None
-                            if isinstance(it, dict):
-                                url_field = it.get("url") or (it.get("item") or {}).get("url")
-                            norm = _normalize(url_field)
-                            if norm and norm not in links:
-                                links.append(norm)
-                    except Exception:
-                        continue
+                page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
-                pass
-
-            # (2) Anchors / data-pdp-url
-            hrefs = page.eval_on_selector_all(
-                'a[href*="/product/"], [data-pdp-url]',
-                '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
-            ) or []
-            for h in hrefs:
-                norm = _normalize(h)
-                if norm and norm not in links:
-                    links.append(norm)
-
-            # (3) Quick View probe (limited) — clicks a few cards to reveal PDP links
-            if not links:
-                buttons = page.query_selector_all('button:has-text("Quick View"), [data-testid="quick-view"]')[:6]
-                for btn in buttons:
-                    try:
-                        btn.click(timeout=1500)
-                        page.wait_for_selector('div[role="dialog"], [data-testid*="modal"]', timeout=2000)
-                        # try to grab a PDP link from modal
-                        modal_href = page.get_attribute('div[role="dialog"] a[href*="/product/"]', "href")
-                        norm = _normalize(modal_href)
-                        if norm and norm not in links:
-                            links.append(norm)
-                    except Exception:
-                        pass
-                    finally:
-                        for sel in ['button:has-text("Close")', '[aria-label="Close"]', 'button[title="Close"]']:
-                            try:
-                                if page.is_visible(sel, timeout=300):
-                                    page.click(sel, timeout=300)
-                                    break
-                            except Exception:
-                                pass
+                page.wait_for_timeout(2500)
 
             context.close()
             browser.close()
-    except Exception as e:
-        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
 
+    except Exception as e:
+        print(f"[warn] Network link extraction failed for {url}: {e}", file=sys.stderr)
+
+    # Cap count for safety
+    if len(links) > max_links:
+        links = links[:max_links]
     return links
 
 from pathlib import Path
@@ -648,16 +640,21 @@ def safe_main():
                 f"(status={cat_status}, source={cat_source}) from {t.url}"
             )
 
-            # Extract product links from the category page
-            product_urls = extract_pc_links_from_dom_with_playwright(
-                t.url, timeout_seconds=cfg.timeout_seconds
+            # --- Extract product links from network (best) then fall back ---
+            product_urls = collect_pc_product_links_with_network(
+                t.url, timeout_seconds=cfg.timeout_seconds, max_links=60
             )
-            if not product_urls:
-                # Fallback to regex on the rendered HTML we already downloaded
-                product_urls = extract_pc_product_links(cat_html, max_links=30)
 
             if not product_urls:
-                print(f"[info] No product links found in category: {t.name}")
+                # Fall back to DOM scan (sometimes tiles render anchors)
+                product_urls = extract_pc_links_from_dom_with_playwright(
+                    t.url, timeout_seconds=cfg.timeout_seconds
+                )
+
+            if not product_urls:
+                # Final fallback: scan the rendered HTML we already fetched for '/product/...'
+                product_urls = extract_pc_product_links(cat_html, max_links=30)
+
                 # Close the aggregate issue if it exists (nothing to buy)
                 aggregate_key = f"[ANY IN STOCK] {t.name}"
                 existing_any = find_issue_by_key(open_issues, aggregate_key)
