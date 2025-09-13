@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-import os, re, sys, time, json
-import requests
+import os
+import re
+import sys
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
+
+import requests
 import yaml
 
 # --- Traffic/latency heuristics ---
@@ -129,17 +133,6 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             print(f"[warn] fetch attempt {attempt+1}/{retries+1} failed for {url}: {e}", file=sys.stderr)
             time.sleep(1.0)
     return None, None, None
-
-# (Optional) async latency probe — keep for experiments; NOT executed.
-# import asyncio, logging, httpx
-# logging.basicConfig(level=logging.INFO, format="%(asctime)s [info] %(message)s")
-# async def fetch_with_latency(client: httpx.AsyncClient, url: str):
-#     t0 = time.perf_counter()
-#     resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20.0)
-#     elapsed_ms = (time.perf_counter() - t0) * 1000.0
-#     logging.info("Fetched %d bytes in %.1f ms (status=%d) %s", len(resp.content or b""), elapsed_ms, resp.status_code, url)
-#     resp.raise_for_status()
-#     return resp.text, elapsed_ms
 
 # =========================
 # GitHub helpers
@@ -283,79 +276,78 @@ def safe_main():
             continue
 
         # --- Category expansion for Pokémon Center ---
-if (t.expand or "").lower() == "pc_category":
-    # Fetch category page once
-    cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
-        t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-    )
-    if cat_html is None:
-        print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
-        continue
+        if (t.expand or "").lower() == "pc_category":
+            # Fetch category page once
+            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
+                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+            )
+            if cat_html is None:
+                print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
+                continue
 
-    # Extract product links from the category page
-    product_urls = extract_pc_product_links(cat_html, max_links=30)
-    if not product_urls:
-        print(f"[info] No product links found in category: {t.name}")
-        # Close the aggregate issue if it exists (nothing to buy)
-        aggregate_key = f"[ANY IN STOCK] {t.name}"
-        existing_any = find_issue_by_key(open_issues, aggregate_key)
-        if existing_any:
-            close_issue(repo, token, existing_any["number"])
-            open_issues = list_open_issues(repo, token, label=label)
-            print(f"[info] closed aggregate issue for {t.name} (no products found)")
-        continue
+            # Extract product links from the category page
+            product_urls = extract_pc_product_links(cat_html, max_links=30)
+            if not product_urls:
+                print(f"[info] No product links found in category: {t.name}")
+                # Close the aggregate issue if it exists (nothing to buy)
+                aggregate_key = f"[ANY IN STOCK] {t.name}"
+                existing_any = find_issue_by_key(open_issues, aggregate_key)
+                if existing_any:
+                    close_issue(repo, token, existing_any["number"])
+                    open_issues = list_open_issues(repo, token, label=label)
+                    print(f"[info] closed aggregate issue for {t.name} (no products found)")
+                continue
 
-    print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
+            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
-    # Check each product page using the SAME parse rules from this target
-    in_stock_urls: List[str] = []
-    for purl in product_urls:
-        p_html, p_status, p_elapsed = fetch_html_with_retries(
-            purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-        )
-        if p_html is None:
-            continue
-        state = detect_stock(p_html, t)  # reuse this target's parse rules
-        if state is True:
-            in_stock_urls.append(purl)
+            # Check each product page using the SAME parse rules from this target
+            in_stock_urls: List[str] = []
+            for purl in product_urls:
+                p_html, p_status, p_elapsed = fetch_html_with_retries(
+                    purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+                )
+                if p_html is None:
+                    continue
+                state = detect_stock(p_html, t)  # reuse this target's parse rules
+                if state is True:
+                    in_stock_urls.append(purl)
 
-    # === Aggregate issue logic: one issue if ANY are in stock ===
-    aggregate_key = f"[ANY IN STOCK] {t.name}"
-    existing_any = find_issue_by_key(open_issues, aggregate_key)
+            # === Aggregate issue logic: one issue if ANY are in stock ===
+            aggregate_key = f"[ANY IN STOCK] {t.name}"
+            existing_any = find_issue_by_key(open_issues, aggregate_key)
 
-    if in_stock_urls:
-        title = f"✅ In stock in category – {t.name} {aggregate_key}"
-        body_lines = [
-            f"One or more items in **{t.name}** appear to be **IN STOCK**:",
-            "",
-            *[f"- {u}" for u in in_stock_urls],
-            "",
-            "_(Auto by RestockWatch)_",
-        ]
-        body = "\n".join(body_lines)
+            if in_stock_urls:
+                title = f"✅ In stock in category – {t.name} {aggregate_key}"
+                body_lines = [
+                    f"One or more items in **{t.name}** appear to be **IN STOCK**:",
+                    "",
+                    *[f"- {u}" for u in in_stock_urls],
+                    "",
+                    "_(Auto by RestockWatch)_",
+                ]
+                body = "\n".join(body_lines)
 
-        if not existing_any:
-            create_issue(repo, token, title, body, labels=[label])
-            open_issues = list_open_issues(repo, token, label=label)  # refresh to avoid dupes
-            print(f"[alert] opened aggregate IN-STOCK issue for {t.name}")
-        else:
-            # Optional: you can PATCH to update the body if you want to reflect the latest URLs.
-            # For now we just keep a single issue open without spamming.
-            print(f"[info] aggregate IN-STOCK issue already open for {t.name}")
-    else:
-        # Nothing buyable right now — close aggregate if it exists
-        if existing_any:
-            close_issue(repo, token, existing_any["number"])
-            open_issues = list_open_issues(repo, token, label=label)
-            print(f"[info] closed aggregate issue for {t.name} (no items currently in stock)")
-        else:
-            print(f"[info] no items in stock for {t.name} (no aggregate issue)")
-    continue  # done with this category target
-# --- END category path ---
+                if not existing_any:
+                    create_issue(repo, token, title, body, labels=[label])
+                    open_issues = list_open_issues(repo, token, label=label)  # refresh to avoid dupes
+                    print(f"[alert] opened aggregate IN-STOCK issue for {t.name}")
+                else:
+                    # Optional: PATCH the body to update the list (skipped to avoid noise)
+                    print(f"[info] aggregate IN-STOCK issue already open for {t.name}")
+            else:
+                # Nothing buyable right now — close aggregate if it exists
+                if existing_any:
+                    close_issue(repo, token, existing_any["number"])
+                    open_issues = list_open_issues(repo, token, label=label)
+                    print(f"[info] closed aggregate issue for {t.name} (no items currently in stock)")
+                else:
+                    print(f"[info] no items in stock for {t.name} (no aggregate issue)")
+            continue  # done with this category target
+        # --- END category path ---
 
         # Single product / general URL path
         html, status, elapsed_ms = fetch_html_with_retries(
-        t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
         )
         if html is None:
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
@@ -418,3 +410,4 @@ if __name__ == "__main__":
         safe_main()
     except Exception as e:
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
+
