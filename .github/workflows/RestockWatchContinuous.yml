@@ -59,6 +59,9 @@ jobs:
           PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYPATH: C:\Program Files\Python311\python.exe
+          PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
+          PC_HEADED: "1"
           DEBUG_PC_DUMP: "1"
         run: |
           while ($true) {
