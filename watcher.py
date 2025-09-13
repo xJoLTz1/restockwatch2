@@ -283,47 +283,75 @@ def safe_main():
             continue
 
         # --- Category expansion for Pokémon Center ---
-        if (t.expand or "").lower() == "pc_category":
-            cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
-                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-            )
-            if cat_html is None:
-                print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
-                continue
+if (t.expand or "").lower() == "pc_category":
+    # Fetch category page once
+    cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
+        t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+    )
+    if cat_html is None:
+        print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
+        continue
 
-            product_urls = extract_pc_product_links(cat_html, max_links=30)
-            if not product_urls:
-                print(f"[info] No product links found in category: {t.name}")
-                continue
+    # Extract product links from the category page
+    product_urls = extract_pc_product_links(cat_html, max_links=30)
+    if not product_urls:
+        print(f"[info] No product links found in category: {t.name}")
+        # Close the aggregate issue if it exists (nothing to buy)
+        aggregate_key = f"[ANY IN STOCK] {t.name}"
+        existing_any = find_issue_by_key(open_issues, aggregate_key)
+        if existing_any:
+            close_issue(repo, token, existing_any["number"])
+            open_issues = list_open_issues(repo, token, label=label)
+            print(f"[info] closed aggregate issue for {t.name} (no products found)")
+        continue
 
-            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
+    print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
-            for purl in product_urls:
-                p_html, p_status, p_elapsed = fetch_html_with_retries(
-                    purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-                )
-                if p_html is None:
-                    continue
+    # Check each product page using the SAME parse rules from this target
+    in_stock_urls: List[str] = []
+    for purl in product_urls:
+        p_html, p_status, p_elapsed = fetch_html_with_retries(
+            purl, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+        )
+        if p_html is None:
+            continue
+        state = detect_stock(p_html, t)  # reuse this target's parse rules
+        if state is True:
+            in_stock_urls.append(purl)
 
-                state = detect_stock(p_html, t)
-                print(f"[debug] {t.name}: detect_stock -> {state}")
-                stock_key = f"[{t.name}] {purl}"
-                existing_stock = find_issue_by_key(open_issues, stock_key)
+    # === Aggregate issue logic: one issue if ANY are in stock ===
+    aggregate_key = f"[ANY IN STOCK] {t.name}"
+    existing_any = find_issue_by_key(open_issues, aggregate_key)
 
-                if state is True:
-                    title = f"✅ IN STOCK {stock_key}"
-                    body = f"Appears IN STOCK.\n\nURL: {purl}\n\n_(Auto by RestockWatch)_"
-                    if not existing_stock:
-                        create_issue(repo, token, title, body, labels=[label])
-                        open_issues = list_open_issues(repo, token, label=label)  # refresh
-                        maybe_send_telegram(cfg.telegram_bot_token, cfg.telegram_chat_id, title, purl, purl)
-                        print(f"[alert] opened issue for {purl}")
-                elif state is False:
-                    if existing_stock:
-                        close_issue(repo, token, existing_stock["number"])
-                        print(f"[info] closed issue for {purl} (OOS)")
-            continue  # next target
-        # --- END category path ---
+    if in_stock_urls:
+        title = f"✅ In stock in category – {t.name} {aggregate_key}"
+        body_lines = [
+            f"One or more items in **{t.name}** appear to be **IN STOCK**:",
+            "",
+            *[f"- {u}" for u in in_stock_urls],
+            "",
+            "_(Auto by RestockWatch)_",
+        ]
+        body = "\n".join(body_lines)
+
+        if not existing_any:
+            create_issue(repo, token, title, body, labels=[label])
+            open_issues = list_open_issues(repo, token, label=label)  # refresh to avoid dupes
+            print(f"[alert] opened aggregate IN-STOCK issue for {t.name}")
+        else:
+            # Optional: you can PATCH to update the body if you want to reflect the latest URLs.
+            # For now we just keep a single issue open without spamming.
+            print(f"[info] aggregate IN-STOCK issue already open for {t.name}")
+    else:
+        # Nothing buyable right now — close aggregate if it exists
+        if existing_any:
+            close_issue(repo, token, existing_any["number"])
+            open_issues = list_open_issues(repo, token, label=label)
+            print(f"[info] closed aggregate issue for {t.name} (no items currently in stock)")
+        else:
+            print(f"[info] no items in stock for {t.name} (no aggregate issue)")
+    continue  # done with this category target
+# --- END category path ---
 
         # Single product / general URL path
         html, status, elapsed_ms = fetch_html_with_retries(
