@@ -9,6 +9,11 @@ from typing import List, Optional, Dict, Any
 import requests
 import yaml
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 # --- Traffic/latency heuristics ---
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
 HIGH_TRAFFIC_STATUSES = {429, 503}
