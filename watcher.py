@@ -38,7 +38,10 @@ PC_STORAGE_STATE = os.environ.get("PC_STORAGE_STATE", "").strip()
 # Optional: raw JSON array of cookie dicts (or {"cookies":[...]})
 PC_COOKIES_JSON = os.environ.get("PC_COOKIES_JSON", "").strip()
 
-# Persistent storage for cookies (our own) to survive restarts
+# Imperva / session handling (our own persistence)
+PC_USE_PERSISTENT = os.environ.get("PC_USE_PERSISTENT", "").strip() == "1"
+PC_USER_DATA_DIR = os.environ.get("PC_USER_DATA_DIR", "pc_debug/pw-profile")
+PC_CHALLENGE_TIMEOUT_S = int(os.environ.get("PC_CHALLENGE_TIMEOUT_S", "180"))
 STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
 
 # Extra “real-ish” headers inc. UA-CH (some botwalls check these)
@@ -46,17 +49,10 @@ _PC_EXTRA_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Upgrade-Insecure-Requests": "1",
-    # Client hints – makes us look more like real Chrome
     "sec-ch-ua": '"Google Chrome";v="126", "Chromium";v="126", "Not.A/Brand";v="24"',
     "sec-ch-ua-platform": '"Windows"',
     "sec-ch-ua-mobile": "?0",
 }
-
-# Imperva / session handling
-PC_USE_PERSISTENT = os.environ.get("PC_USE_PERSISTENT", "").strip() == "1"
-PC_USER_DATA_DIR  = os.environ.get("PC_USER_DATA_DIR", "pc_debug/pw-profile")
-PC_CHALLENGE_TIMEOUT_S = int(os.environ.get("PC_CHALLENGE_TIMEOUT_S", "180"))
-STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
 
 # --- Traffic/latency heuristics ----------------------------------------------
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
@@ -179,7 +175,6 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     base = outdir / f"{ts}-{name}"
 
-    # html & screenshot
     try:
         (base.with_suffix(".html")).write_text(html or "", encoding="utf-8")
     except Exception as e:
@@ -190,16 +185,14 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
     except Exception as e:
         print(f"[warn] debug screenshot failed: {e}", file=sys.stderr)
 
-    # collect light-weight response metadata + save JSON bodies
     info = {"status": resp_status, "notes": notes, "responses": []}
     for r in responses:
         try:
             ctype = (r.headers.get("content-type") or "").lower()
             rec = {"url": r.url, "status": r.status, "content_type": ctype}
             info["responses"].append(rec)
-            # Save JSON bodies
             if "application/json" in ctype:
-                body = r.text()  # sync in Playwright Python
+                body = r.text()
                 if body and len(body) < 2_000_000:
                     jname = outdir / f"{ts}-{name}-{_pc_slug(r.url)}.json"
                     jname.write_text(body, encoding="utf-8")
@@ -231,14 +224,23 @@ def _open_context(pw):
             user_data_dir=PC_USER_DATA_DIR,
             headless=not PC_HEADED,
             args=extra_args,
+            user_agent=PC_REAL_UA,
+            viewport={"width": 1366, "height": 900},
+            locale="en-US",
+            timezone_id="America/New_York",
         )
     else:
         browser = pw.chromium.launch(headless=not PC_HEADED, args=extra_args)
-        ctx = browser.new_context()
+        ctx = browser.new_context(
+            user_agent=PC_REAL_UA,
+            viewport={"width": 1366, "height": 900},
+            locale="en-US",
+            timezone_id="America/New_York",
+        )
         ctx._attached_browser = browser  # so we can close it later
 
-    # headers, UA, spoofing
     ctx.set_default_timeout(20_000)
+    ctx.set_default_navigation_timeout(20_000)
     ctx.set_extra_http_headers(_PC_EXTRA_HEADERS)
     ctx.add_init_script("""
         Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
@@ -248,11 +250,8 @@ def _open_context(pw):
         Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
         Object.defineProperty(navigator, 'mimeTypes', { get: () => [1,2] });
     """)
-    # use our “real” UA + viewport
-    ctx.grant_permissions([], origin="https://www.pokemoncenter.com")
-    ctx.set_default_navigation_timeout(20_000)
     try:
-        ctx.set_geolocation({'latitude': 40.7128, 'longitude': -74.0060})  # harmless; some walls like it
+        ctx.set_geolocation({'latitude': 40.7128, 'longitude': -74.0060})
     except Exception:
         pass
     return ctx
@@ -262,58 +261,12 @@ def _close_context(ctx):
         ctx.close()
     except Exception:
         pass
-    # close attached browser if non-persistent
     br = getattr(ctx, "_attached_browser", None)
     if br:
         try:
             br.close()
         except Exception:
             pass
-
-
-def _launch_browser(pw):
-    """Single place to control headless/headed + common args."""
-    return pw.chromium.launch(
-        headless=not PC_HEADED,
-        args=[
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
-            "--no-sandbox",
-            "--disable-gpu",
-        ],
-    )
-
-def _new_context(browser, *, extra_headers=None):
-    ctx = browser.new_context(
-        user_agent=PC_REAL_UA,
-        viewport={"width": 1366, "height": 900},
-        locale="en-US",
-        timezone_id="America/New_York",
-        java_script_enabled=True,
-        extra_http_headers=extra_headers or _PC_EXTRA_HEADERS,
-        device_scale_factor=1.0,
-        is_mobile=False,
-        has_touch=False,
-        bypass_csp=True,
-        storage_state=STORAGE_STATE_PATH if os.path.exists(STORAGE_STATE_PATH) else None,
-    )
-    ctx.add_init_script("""
-        Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
-        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3] });
-        Object.defineProperty(navigator, 'mimeTypes', { get: () => [1,2] });
-        const originalQuery = window.navigator.permissions && window.navigator.permissions.query;
-        if (originalQuery) {
-          window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications'
-              ? Promise.resolve({ state: Notification.permission })
-              : originalQuery(parameters)
-          );
-        }
-    """)
-    return ctx
 
 def _maybe_load_cookies_into_context(context):
     # Highest priority: full storage state file (user-provided)
@@ -359,8 +312,63 @@ def _wire_challenge_blocking(page):
                 pass
     page.route("**/*", _route_handler)
 
+# ---- Imperva detection / guided solve ---------------------------------------
+
+def _looks_like_incapsula_challenge(page_html: str) -> bool:
+    low = (page_html or "").lower()
+    if "additional security check is required" in low: return True
+    if "hcaptcha" in low: return True
+    if "powered by imperva" in low: return True
+    return False
+
+def _await_challenge_resolution(page) -> bool:
+    """
+    If the Imperva page is shown, ask the human to solve it (only in headed mode).
+    Returns True if we think the challenge is cleared afterwards.
+    """
+    has_iframe = page.locator('iframe[src*="hcaptcha"]').first
+    banner = page.locator('text=Additional security check').first
+
+    try:
+        visible = has_iframe.is_visible(timeout=500) or banner.is_visible(timeout=500)
+    except Exception:
+        visible = False
+
+    if not visible:
+        return False
+
+    if not PC_HEADED:
+        print("[warn] Imperva challenge detected but PC_HEADED is off; cannot be solved automatically.", file=sys.stderr)
+        return False
+
+    print("[action] Imperva challenge detected. Please solve the checkbox in the visible window...", file=sys.stderr)
+
+    deadline = time.time() + PC_CHALLENGE_TIMEOUT_S
+    solved = False
+    while time.time() < deadline:
+        try:
+            if (not has_iframe.is_visible(timeout=500)) and (not banner.is_visible(timeout=1500)):
+                page.wait_for_load_state("networkidle", timeout=5000)
+                html = page.content()
+                if len(html or "") > 9000 and ("product" in html or "category" in html):
+                    solved = True
+                    break
+        except Exception:
+            pass
+        page.wait_for_timeout(750)
+
+    if solved:
+        print("[info] Challenge cleared. Persisting cookies/state.", file=sys.stderr)
+        try:
+            page.context.storage_state(path=STORAGE_STATE_PATH)
+        except Exception:
+            pass
+    else:
+        print("[warn] Challenge not cleared in time.", file=sys.stderr)
+    return solved
+
 # =========================
-# PC fetchers (with retry)
+# PC fetchers
 # =========================
 
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
@@ -372,6 +380,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     try:
         with sync_playwright() as pw:
             ctx = _open_context(pw)
+            ctx = _maybe_load_cookies_into_context(ctx)
             page = ctx.new_page()
             page.on("response", lambda r: responses.append(r))
 
@@ -395,20 +404,18 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             html_probe = page.content()
             if _looks_like_incapsula_challenge(html_probe):
                 if _await_challenge_resolution(page):
-                    responses.clear()  # new cycle of requests after solve
+                    responses.clear()
                     page.reload(wait_until="domcontentloaded")
-                else:
-                    # leave html as-is; small shell will be returned
-                    pass
 
             # Progressive scroll to fire lazy feeds
             end = time.time() + 7
             while time.time() < end:
-                try: page.mouse.wheel(0, 900)
-                except Exception: pass
+                try:
+                    page.mouse.wheel(0, 900)
+                except Exception:
+                    pass
                 page.wait_for_timeout(400)
 
-            # Let network settle
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
@@ -426,13 +433,13 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     continue
 
-            # Dump debug bundle
             _pc_dump(_pc_slug(url), page, html or "", status, "waited=networkidle", responses)
 
-            # Persist state if we got “real” HTML
             if html and len(html) > 9000:
-                try: ctx.storage_state(path=STORAGE_STATE_PATH)
-                except Exception: pass
+                try:
+                    ctx.storage_state(path=STORAGE_STATE_PATH)
+                except Exception:
+                    pass
 
             _close_context(ctx)
 
@@ -443,25 +450,6 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     if len(html or "") < 9000:
         print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
-    return html, status, elapsed_ms
-
-    t0 = time.perf_counter()
-    # Attempt 1: respect PC_BLOCK_CHALLENGE_JS setting
-    html, status, waited, resps = _attempt(allow_challenge=False)
-    small = len(html or "") < 9000
-    try:
-        saw_403 = any(getattr(r, "status", 0) == 403 for r in resps)
-    except Exception:
-        saw_403 = False
-
-    # If shell/403/small, Attempt 2: allow challenge
-    if small or saw_403:
-        html, status, waited, resps = _attempt(allow_challenge=True)
-
-    elapsed_ms = int((time.perf_counter() - t0) * 1000)
-    if len(html or "") < 9000:
-        print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
-
     return html, status, elapsed_ms
 
 def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
@@ -481,59 +469,6 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
         )
         source = "raw"
     return html, status, elapsed_ms, source
-
-def _looks_like_incapsula_challenge(page_html: str) -> bool:
-    low = (page_html or "").lower()
-    if "additional security check is required" in low: return True
-    if "hcaptcha" in low: return True
-    if "powered by imperva" in low: return True
-    return False
-
-def _await_challenge_resolution(page) -> bool:
-    """
-    If the Imperva page is shown, ask the human to solve it (only in headed mode).
-    Returns True if we think the challenge is cleared afterwards.
-    """
-    # quick probe for hCaptcha iframe or the blue banner text
-    has_iframe = page.locator('iframe[src*="hcaptcha"]').first
-    banner     = page.locator('text=Additional security check').first
-
-    if not (has_iframe.is_visible(timeout=500) or banner.is_visible(timeout=500)):
-        return False  # no obvious challenge elements
-
-    if not PC_HEADED:
-        print("[warn] Imperva challenge detected but PC_HEADED is off; cannot be solved automatically.", file=sys.stderr)
-        return False
-
-    print("[action] Imperva challenge detected. Please solve the checkbox in the visible window...", file=sys.stderr)
-
-    # Wait up to PC_CHALLENGE_TIMEOUT_S for the challenge to disappear and content to load.
-    deadline = time.time() + PC_CHALLENGE_TIMEOUT_S
-    solved = False
-    while time.time() < deadline:
-        try:
-            # Heuristics: hcaptcha iframe gone and we see non-trivial DOM
-            if not has_iframe.is_visible(timeout=500) and not banner.is_visible(timeout=2000):
-                # Give the site a moment to redirect / hydrate
-                page.wait_for_load_state("networkidle", timeout=5000)
-                html = page.content()
-                if len(html or "") > 9000 and ("product" in html or "category" in html):
-                    solved = True
-                    break
-        except Exception:
-            pass
-        page.wait_for_timeout(750)
-
-    if solved:
-        print("[info] Challenge cleared. Persisting cookies/state.", file=sys.stderr)
-        try:
-            page.context.storage_state(path=STORAGE_STATE_PATH)
-        except Exception:
-            pass
-    else:
-        print("[warn] Challenge not cleared in time.", file=sys.stderr)
-    return solved
-
 
 # =========================
 # Category link extractors
@@ -570,8 +505,6 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     by scanning the *network responses* (JSON/JS/HTML) for '/product/...' paths.
     Two attempts: 1) possibly blocking challenge; 2) always allowing challenge.
     """
-    from playwright.sync_api import sync_playwright
-
     base = "https://www.pokemoncenter.com"
     links: List[str] = []
     seen = set()
@@ -592,11 +525,9 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     for attempt in (1, 2):
         try:
             with sync_playwright() as pw:
-                browser = _launch_browser(pw)
-                context = _new_context(browser)
-                context = _maybe_load_cookies_into_context(context)
-                page = context.new_page()
-
+                ctx = _open_context(pw)
+                ctx = _maybe_load_cookies_into_context(ctx)
+                page = ctx.new_page()
                 if attempt == 1 and PC_BLOCK_CHALLENGE_JS:
                     _wire_challenge_blocking(page)
 
@@ -619,6 +550,8 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
                 page.on("response", on_response)
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
+                # --- Log 403s early
+                # (Responses captured in handler above—this log will appear on the next loop if any 403s hit.)
                 # Cookie banner (best-effort)
                 for sel in [
                     'button:has-text("Accept All")',
@@ -645,8 +578,7 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
                 except Exception:
                     page.wait_for_timeout(2500)
 
-                context.close()
-                browser.close()
+                _close_context(ctx)
 
             if links:
                 break
@@ -663,8 +595,6 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
     Simple DOM fallback: look for anchors or data-pdp-url in hydrated DOM.
     Two attempts: 1) possibly blocking challenge; 2) always allowing challenge.
     """
-    from playwright.sync_api import sync_playwright
-
     base = "https://www.pokemoncenter.com"
     links: List[str] = []
     seen = set()
@@ -682,11 +612,9 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
     for attempt in (1, 2):
         try:
             with sync_playwright() as pw:
-                browser = _launch_browser(pw)
-                context = _new_context(browser)
-                context = _maybe_load_cookies_into_context(context)
-                page = context.new_page()
-
+                ctx = _open_context(pw)
+                ctx = _maybe_load_cookies_into_context(ctx)
+                page = ctx.new_page()
                 if attempt == 1 and PC_BLOCK_CHALLENGE_JS:
                     _wire_challenge_blocking(page)
 
@@ -731,8 +659,7 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                         seen.add(u)
                         links.append(u)
 
-                context.close()
-                browser.close()
+                _close_context(ctx)
 
             if links:
                 break
@@ -785,6 +712,36 @@ def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
 
 # =========================
+# Push helpers
+# =========================
+
+def maybe_send_pushover(token: Optional[str], user: Optional[str], title: str, message: str, url: Optional[str] = None):
+    if not token or not user:
+        return
+    data = {"token": token, "user": user, "title": title, "message": message}
+    if url:
+        data["url"] = url
+    try:
+        requests.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
+    except Exception as e:
+        print(f"[warn] pushover failed: {e}", file=sys.stderr)
+
+def maybe_send_telegram(bot_token: Optional[str], chat_id: Optional[str], title: str, message: str, url: Optional[str] = None):
+    if not bot_token or not chat_id:
+        return
+    text = f"*{title}*\n{message}"
+    if url:
+        text += f"\n{url}"
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            data={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[warn] telegram failed: {e}", file=sys.stderr)
+
+# =========================
 # Stock detection
 # =========================
 
@@ -794,21 +751,21 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
     Prefers JSON/schema signals, then regex/contains according to config.
     """
     mode = (t.parse.mode or "contains").lower()
-    low = html.lower()
+    low = (html or "").lower()
 
     # Strong structured signals
-    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I) or \
-       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"IN_STOCK"', html, flags=re.I):
+    if re.search(r'"availability"\s*:\s*"[^"]*InStock', html or "", flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"IN_STOCK"', html or "", flags=re.I):
         return True
-    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html, flags=re.I) or \
-       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"', html, flags=re.I):
+    if re.search(r'"availability"\s*:\s*"[^"]*OutOfStock', html or "", flags=re.I) or \
+       re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"(OUT_OF_STOCK|UNAVAILABLE)"', html or "", flags=re.I):
         return False
 
     if mode == "regex":
         pin = t.parse.pattern_in_stock
         pout = t.parse.pattern_out_of_stock
-        has_in = bool(re.search(pin, html, flags=re.I | re.S)) if pin else False
-        has_out = bool(re.search(pout, html, flags=re.I | re.S)) if pout else False
+        has_in = bool(re.search(pin, html or "", flags=re.I | re.S)) if pin else False
+        has_out = bool(re.search(pout, html or "", flags=re.I | re.S)) if pout else False
         if has_in and not has_out:
             return True
         if has_out and not has_in:
@@ -879,14 +836,12 @@ def safe_main():
             if not product_urls:
                 product_urls = extract_pc_product_links(cat_html, max_links=30)
 
-            # Extra visibility
             if product_urls:
                 preview = ", ".join(product_urls[:5])
                 print(f"[debug] {t.name}: network-extracted {len(product_urls)} product URLs")
                 print(f"[debug] {t.name}: first URLs -> {preview}")
             else:
                 print(f"[info] No product links found in category: {t.name}")
-                # Close the aggregate issue if it exists (nothing to buy)
                 aggregate_key = f"[ANY IN STOCK] {t.name}"
                 existing_any = find_issue_by_key(open_issues, aggregate_key)
                 if existing_any:
@@ -940,9 +895,8 @@ def safe_main():
                 else:
                     print(f"[info] no items in stock for {t.name} (no aggregate issue)")
             continue  # done with this category target
-        # --- END category path ---
 
-        # ----- Single product / general URL path -----
+        # --- Single product / general URL path ---
         html, status, elapsed_ms, source = fetch_pc_or_raw(
             t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
         )
