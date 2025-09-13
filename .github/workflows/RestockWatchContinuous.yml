@@ -39,6 +39,17 @@ jobs:
           & "${env:PYPATH}" -m pip install --upgrade pip
           & "${env:PYPATH}" -m pip install -r requirements.txt
 
+      - name: Install Playwright browsers
+        shell: pwsh
+        run: |
+          & "${env:PYPATH}" -m playwright install chromium
+
+      - name: Verify Playwright
+        shell: pwsh
+        run: |
+          & "${env:PYPATH}" -c "import playwright.sync_api as p; print('playwright ok')"
+
+
       - name: Loop every 60s
         shell: powershell
         env:
