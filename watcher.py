@@ -15,6 +15,12 @@ try:
 except Exception:
     pass
 
+PC_REAL_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+
 # --- Traffic/latency heuristics ---
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
 HIGH_TRAFFIC_STATUSES = {429, 503}
@@ -143,8 +149,8 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
 # ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     """
-    Use Playwright Chromium to render Pokemon Center pages so the real DOM loads.
-    Returns (html, status_code, elapsed_ms) or (None, None, None) on failure.
+    Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
+    Forces a realistic desktop UA and does light interaction to bypass the JS shell.
     """
     from playwright.sync_api import sync_playwright
     import time as _time
@@ -156,8 +162,10 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent=ua,
+                user_agent=PC_REAL_UA,  # force real UA for PC
                 viewport={'width': 1366, 'height': 900},
+                locale="en-US",
+                timezone_id="America/New_York",
                 java_script_enabled=True,
                 extra_http_headers={
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -165,18 +173,52 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
-            page = context.new_page()
+            # reduce fingerprint (very mild)
+            context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
-            # Track main response to get the status
+            page = context.new_page()
             main_response = None
             def _resp(r):
                 nonlocal main_response
-                if r.url == url and main_response is None:
+                if r.url.split("#")[0] == url.split("#")[0] and main_response is None:
                     main_response = r
             page.on("response", _resp)
 
-            page.goto(url, wait_until="networkidle", timeout=timeout_seconds * 1000)
-            page.wait_for_timeout(800)  # small wait for late async widgets
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+
+            # Try to accept cookie banners (best-effort, ignore errors)
+            for sel in ['button:has-text("Accept All")',
+                        'button:has-text("Accept all")',
+                        'button:has-text("Accept Cookies")',
+                        '[data-testid="cookie-accept-all"]',
+                        '[id*="onetrust-accept"]']:
+                try:
+                    if page.is_visible(sel, timeout=500):
+                        page.click(sel, timeout=500)
+                        break
+                except Exception:
+                    pass
+
+            # Nudge page to actually render content: small scroll+idle wait
+            try:
+                page.mouse.wheel(0, 1000)
+            except Exception:
+                pass
+
+            # Wait for product grid/link hints if available; otherwise small idle
+            waited = False
+            for sel in ['a[href^="/product/"]',
+                        '[data-pdp-url]',
+                        '[data-automation-id="product"]',
+                        'script[type="application/ld+json"]']:
+                try:
+                    page.wait_for_selector(sel, timeout=3000)
+                    waited = True
+                    break
+                except Exception:
+                    continue
+            if not waited:
+                page.wait_for_timeout(1800)
 
             html = page.content()
             status = main_response.status if main_response else 200
@@ -188,6 +230,9 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
         return None, None, None
 
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    # Lightweight bot-wall signal for your logs
+    if len(html or "") < 5000 and re.search(r'/vice-come-[^"]+\.js|NOINDEX,?\s*NOFOLLOW', html or "", flags=re.I):
+        print(f"[info] PC JS shell likely for {url} (len={len(html)})", file=sys.stderr)
     return html, status, elapsed_ms
 
 def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
@@ -250,6 +295,72 @@ def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]
 
 def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
+
+def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
+    """
+    Re-render a category URL and pull product links from the live DOM
+    (avoids brittle regex when PC injects links client-side).
+    """
+    from playwright.sync_api import sync_playwright
+    import time as _time
+
+    links: List[str] = []
+    base = "https://www.pokemoncenter.com"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=PC_REAL_UA,
+                viewport={'width': 1366, 'height': 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+                java_script_enabled=True,
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+
+            # cookie accept best-effort
+            for sel in ['button:has-text("Accept All")',
+                        'button:has-text("Accept all")',
+                        'button:has-text("Accept Cookies")',
+                        '[data-testid="cookie-accept-all"]',
+                        '[id*="onetrust-accept"]']:
+                try:
+                    if page.is_visible(sel, timeout=500):
+                        page.click(sel, timeout=500)
+                        break
+                except Exception:
+                    pass
+
+            # Let products load
+            page.mouse.wheel(0, 1200)
+            try:
+                page.wait_for_selector('a[href^="/product/"]', timeout=3500)
+            except Exception:
+                page.wait_for_timeout(2000)
+
+            hrefs = page.eval_on_selector_all(
+                'a[href^="/product/"]', 'els => els.map(e => e.getAttribute("href"))'
+            ) or []
+
+            # dedupe & normalize
+            seen = set()
+            for h in hrefs:
+                if not h:
+                    continue
+                if not h.startswith("/product/"):
+                    continue
+                full = (base + h.split("?")[0]).strip()
+                if full not in seen:
+                    seen.add(full)
+                    links.append(full)
+
+            context.close()
+            browser.close()
+    except Exception as e:
+        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
+
+    return links
 
 # =========================
 # Stock detection
@@ -364,7 +475,11 @@ def safe_main():
                   f"(status={cat_status}, source={cat_source}) from {t.url}")
 
             # Extract product links from the category page
-            product_urls = extract_pc_product_links(cat_html, max_links=30)
+# Prefer live DOM extraction; if it returns none, fall back to regex on HTML
+        product_urls = extract_pc_links_from_dom_with_playwright(t.url, timeout_seconds=cfg.timeout_seconds)
+        if not product_urls:
+        product_urls = extract_pc_product_links(cat_html, max_links=30)
+
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
                 # Close the aggregate issue if it exists (nothing to buy)
