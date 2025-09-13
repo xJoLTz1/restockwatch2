@@ -3,6 +3,9 @@ import os
 import re
 import sys
 import time
+import pathlib
+import json as _json
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
@@ -23,6 +26,7 @@ PC_REAL_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
+PC_HEADED = os.environ.get("PC_HEADED", "0") == "1"  # set to 1 to run non-headless on self-hosted
 
 # --- Traffic/latency heuristics ---
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
@@ -149,21 +153,22 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             time.sleep(1.0)
     return None, None, None
 
-# ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
-import pathlib, json as _json
-from datetime import datetime
-
+# ---- Debug utilities for Playwright dumps ----
 def _pc_slug(url: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", url.lower())
     return s.strip("-")[:120]
+
+def _pc_debug_dir() -> pathlib.Path:
+    d = pathlib.Path("pc_debug")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str, responses: list):
     """Write HTML, PNG, and a small info.json (plus XHR bodies) when DEBUG_PC_DUMP=1."""
     if os.environ.get("DEBUG_PC_DUMP") != "1":
         return
 
-    outdir = pathlib.Path("pc_debug")
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir = _pc_debug_dir()
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     base = outdir / f"{ts}-{name}"
 
@@ -190,10 +195,9 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
             rec = {"url": r.url, "status": r.status, "content_type": ctype}
             info["responses"].append(rec)
 
-            # Save JSON bodies (useful to spot the data feed)
+            # Save JSON bodies
             if "application/json" in ctype:
-                body = r.text()  # Playwright Response.text() is sync in Python
-                # short-circuit large blobs
+                body = r.text()  # sync in Playwright Python
                 if body and len(body) < 2_000_000:
                     jname = outdir / f"{ts}-{name}-{_pc_slug(r.url)}.json"
                     jname.write_text(body, encoding="utf-8")
@@ -205,7 +209,7 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
     except Exception as e:
         print(f"[warn] debug info write failed: {e}", file=sys.stderr)
 
-# ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
+# ---- Playwright render for a single URL (PC) ----
 def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     """
     Render Pokemon Center pages with Playwright and return (html, status, elapsed_ms).
@@ -223,7 +227,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
-                headless=True,
+                headless=not PC_HEADED,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
@@ -276,18 +280,24 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                 except Exception:
                     pass
 
+            # Human-ish nudge if headed (helps some bot checks)
+            if PC_HEADED:
+                try:
+                    page.mouse.move(200, 200)
+                    page.mouse.wheel(0, 1000)
+                except Exception:
+                    pass
+
             # Try to let XHRs finish
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
                 waited_label = "networkidle"
             except Exception:
-                # Scroll / jitter to trigger lazy loads, then a short wait
                 try: page.mouse.wheel(0, 1600)
                 except Exception: pass
                 page.wait_for_timeout(2000)
                 waited_label = "fallback-wait"
 
-            # One more small grace period if the DOM still looks tiny
             if len((page.content() or "")) < 4000:
                 page.wait_for_timeout(1500)
 
@@ -312,7 +322,6 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
         return None, None, None
 
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-    # Helpful log if it still looks like a shell
     if len(html or "") < 5000:
         print(f"[info] PC page small after render ({len(html)} bytes): {url}", file=sys.stderr)
 
@@ -340,10 +349,8 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     """
     Open a Pokémon Center *category* URL in Playwright and capture product URLs
     by scanning the *network responses* (JSON/JS/HTML) for '/product/...' paths.
-    This bypasses Incapsula's JS shell and 'Quick View' tiles entirely.
     """
     from playwright.sync_api import sync_playwright
-    import time as _time
 
     base = "https://www.pokemoncenter.com"
     links: List[str] = []
@@ -352,7 +359,6 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     def _maybe_add(pathish: Optional[str]):
         if not pathish:
             return
-        # normalize to absolute product URL
         if pathish.startswith("/product/"):
             full = base + pathish.split("?")[0]
         elif pathish.startswith(base + "/product/"):
@@ -366,7 +372,7 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
-                headless=True,
+                headless=not PC_HEADED,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
             )
             context = browser.new_context(
@@ -390,30 +396,24 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
 
             page = context.new_page()
 
-            # Capture response bodies and scan for '/product/...' paths
             def on_response(resp):
                 try:
                     url_l = resp.url.lower()
-                    # Only look at PC responses (skip fonts, 3rd party, etc.)
                     if "pokemoncenter.com" not in url_l:
                         return
                     ct = (resp.headers or {}).get("content-type", "").lower()
                     if not any(k in ct for k in ("json", "javascript", "html")):
                         return
-                    # Read body as text and scan for product paths
                     body = resp.text()
                     for m in re.findall(r'(?:"|\')(/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
                         _maybe_add(m)
-                    # Some feeds use absolute URLs; catch those too
                     for m in re.findall(r'(?:"|\')(https://www\.pokemoncenter\.com/product/[A-Za-z0-9\-/]+)(?:\?|["\'])', body):
                         _maybe_add(m)
                 except Exception:
-                    # Never let response parsing kill the run
                     pass
 
             page.on("response", on_response)
 
-            # Navigate and let all network calls happen
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
             # Cookie banner (best-effort)
@@ -430,11 +430,15 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
                 except Exception:
                     pass
 
-            # Scroll + settle; PC often fires data calls after first paint
-            try: page.mouse.wheel(0, 1600)
-            except Exception: pass
+            # Human-ish moves help sometimes
+            if PC_HEADED:
+                try:
+                    page.mouse.move(300, 300)
+                    page.mouse.wheel(0, 1200)
+                except Exception:
+                    pass
 
-            # Give the feed calls time to complete; prefer networkidle
+            # Prefer networkidle to let feeds land
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
@@ -446,43 +450,80 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
     except Exception as e:
         print(f"[warn] Network link extraction failed for {url}: {e}", file=sys.stderr)
 
-    # Cap count for safety
     if len(links) > max_links:
         links = links[:max_links]
     return links
 
-from pathlib import Path
-from datetime import datetime
+def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
+    """
+    Simple DOM fallback: look for anchors or data-pdp-url in hydrated DOM.
+    """
+    from playwright.sync_api import sync_playwright
 
-DEBUG_PC_DUMP = os.environ.get("DEBUG_PC_DUMP", "").strip() != ""
+    base = "https://www.pokemoncenter.com"
+    links: List[str] = []
+    seen = set()
 
-def _safe_name(s: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9._-]+", "_", s)[:160]
+    def _norm(h: Optional[str]) -> Optional[str]:
+        if not h:
+            return None
+        h = h.strip()
+        if h.startswith("/product/"):
+            return base + h.split("?")[0]
+        if h.startswith(base + "/product/"):
+            return h.split("?")[0]
+        return None
 
-def _pc_debug_dir() -> Path:
-    d = Path("pc_debug")
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(
+                headless=not PC_HEADED,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
+            )
+            context = browser.new_context(
+                user_agent=PC_REAL_UA,
+                viewport={'width': 1366, 'height': 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+                java_script_enabled=True,
+            )
+            context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            page = context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-def dump_debug_artifacts(kind: str, url: str, html: Optional[str] = None, page=None, note: str = ""):
-    """Save HTML and/or a screenshot for troubleshooting."""
-    if not DEBUG_PC_DUMP:
-        return
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    safe = _safe_name(f"{kind}_{ts}_{url.split('://')[-1]}")
-    outdir = _pc_debug_dir()
+            # Cookie accept best-effort
+            for sel in [
+                'button:has-text("Accept All")', 'button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]', '[id*="onetrust-accept"]'
+            ]:
+                try:
+                    if page.is_visible(sel, timeout=500):
+                        page.click(sel, timeout=500)
+                        break
+                except Exception:
+                    pass
 
-    if html is not None:
-        (outdir / f"{safe}.html").write_text(html, encoding="utf-8", errors="ignore")
+            try:
+                page.wait_for_load_state("networkidle", timeout=6000)
+            except Exception:
+                page.wait_for_timeout(2000)
 
-    if page is not None:
-        try:
-            page.screenshot(path=str(outdir / f"{safe}.png"), full_page=True)
-        except Exception as e:
-            print(f"[warn] screenshot failed for {url}: {e}", file=sys.stderr)
+            hrefs = page.eval_on_selector_all(
+                'a[href*="/product/"], [data-pdp-url]',
+                '''els => els.map(e => e.getAttribute("href") || e.getAttribute("data-pdp-url"))'''
+            ) or []
+            for h in hrefs:
+                u = _norm(h)
+                if u and u not in seen:
+                    seen.add(u)
+                    links.append(u)
 
-    if note:
-        (outdir / f"{safe}.txt").write_text(note, encoding="utf-8", errors="ignore")
+            context.close()
+            browser.close()
+    except Exception as e:
+        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
+
+    return links
 
 # =========================
 # GitHub helpers
@@ -538,7 +579,6 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
     mode = (t.parse.mode or "contains").lower()
     low = html.lower()
 
-    # Strong structured signals often present even in JS shells
     if re.search(r'"availability"\s*:\s*"[^"]*InStock', html, flags=re.I) or \
        re.search(r'"(availability_status|availability|inventory_status)"\s*:\s*"IN_STOCK"', html, flags=re.I):
         return True
@@ -557,7 +597,6 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
             return False
         return None
 
-    # mode == "contains"
     def contains_any(text: str, needles: List[str]) -> bool:
         return any((n or "").lower() in text for n in (needles or []))
 
@@ -646,15 +685,20 @@ def safe_main():
             )
 
             if not product_urls:
-                # Fall back to DOM scan (sometimes tiles render anchors)
                 product_urls = extract_pc_links_from_dom_with_playwright(
                     t.url, timeout_seconds=cfg.timeout_seconds
                 )
 
             if not product_urls:
-                # Final fallback: scan the rendered HTML we already fetched for '/product/...'
                 product_urls = extract_pc_product_links(cat_html, max_links=30)
 
+            # Extra visibility
+            if product_urls:
+                preview = ", ".join(product_urls[:5])
+                print(f"[debug] {t.name}: network-extracted {len(product_urls)} product URLs")
+                print(f"[debug] {t.name}: first URLs -> {preview}")
+            else:
+                print(f"[info] No product links found in category: {t.name}")
                 # Close the aggregate issue if it exists (nothing to buy)
                 aggregate_key = f"[ANY IN STOCK] {t.name}"
                 existing_any = find_issue_by_key(open_issues, aggregate_key)
@@ -663,8 +707,6 @@ def safe_main():
                     open_issues = list_open_issues(repo, token, label=label)
                     print(f"[info] closed aggregate issue for {t.name} (no products found)")
                 continue
-
-            print(f"[debug] {t.name}: found {len(product_urls)} product URLs")
 
             # Check each product page (rendered for PC) using this target's parse rules
             in_stock_urls: List[str] = []
