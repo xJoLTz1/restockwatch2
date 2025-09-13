@@ -54,6 +54,13 @@ _PC_EXTRA_HEADERS = {
     "sec-ch-ua-mobile": "?0",
 }
 
+# Human bootstrap: open a visible window and wait for user to clear Imperva once
+PC_REQUIRE_HUMAN = os.environ.get("PC_REQUIRE_HUMAN", "").strip() == "1"
+PC_BOOT_URL = os.environ.get("PC_BOOT_URL", "https://www.pokemoncenter.com/")
+
+# Optionally launch a real installed browser channel ('chrome' or 'msedge') for higher trust
+PW_CHANNEL = os.environ.get("PW_CHANNEL", "").strip()  # "", "chrome", or "msedge"
+
 # --- Traffic/latency heuristics ----------------------------------------------
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
 HIGH_TRAFFIC_STATUSES = {429, 503}
@@ -208,10 +215,6 @@ def _pc_dump(name: str, page, html: str, resp_status: Optional[int], notes: str,
 from playwright.sync_api import sync_playwright
 
 def _open_context(pw):
-    """
-    Returns a Playwright *context*. If PC_USE_PERSISTENT=1, this is already a persistent context.
-    In non-persistent mode, we create a browser + context and attach the browser handle for closing.
-    """
     extra_args = [
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
@@ -228,16 +231,21 @@ def _open_context(pw):
             viewport={"width": 1366, "height": 900},
             locale="en-US",
             timezone_id="America/New_York",
+            channel=(PW_CHANNEL or None),
         )
     else:
-        browser = pw.chromium.launch(headless=not PC_HEADED, args=extra_args)
+        browser = pw.chromium.launch(
+            headless=not PC_HEADED,
+            args=extra_args,
+            channel=(PW_CHANNEL or None),
+        )
         ctx = browser.new_context(
             user_agent=PC_REAL_UA,
             viewport={"width": 1366, "height": 900},
             locale="en-US",
             timezone_id="America/New_York",
         )
-        ctx._attached_browser = browser  # so we can close it later
+        ctx._attached_browser = browser
 
     ctx.set_default_timeout(20_000)
     ctx.set_default_navigation_timeout(20_000)
@@ -382,6 +390,11 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             ctx = _open_context(pw)
             ctx = _maybe_load_cookies_into_context(ctx)
             page = ctx.new_page()
+            try:
+                if PC_HEADED:
+                    page.bring_to_front()
+            except Exception:
+                pass
             page.on("response", lambda r: responses.append(r))
 
             # Warm-up: homepage (helps set cookie)
@@ -784,6 +797,55 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
         return False
     return None
 
+def _human_bootstrap_once():
+    """
+    If PC_REQUIRE_HUMAN=1 and we detect Imperva on the homepage,
+    open a headed window, bring it to front, and wait for the user to clear it.
+    Persist cookies/state so future runs are hands-free.
+    """
+    if not PC_REQUIRE_HUMAN:
+        return
+
+    if not PC_HEADED:
+        print("[warn] PC_REQUIRE_HUMAN=1 but PC_HEADED=0; cannot show a window.", file=sys.stderr)
+        return
+
+    print("[action] Human bootstrap: opening a visible browser window for Imperva solve...", file=sys.stderr)
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as pw:
+            ctx = _open_context(pw)
+            ctx = _maybe_load_cookies_into_context(ctx)
+            page = ctx.new_page()
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+
+            page.goto(PC_BOOT_URL, wait_until="domcontentloaded", timeout=30000)
+
+            html = page.content()
+            if not _looks_like_incapsula_challenge(html):
+                # Already clear; persist and bail
+                try: ctx.storage_state(path=STORAGE_STATE_PATH)
+                except Exception: pass
+                _close_context(ctx)
+                print("[info] No challenge detected on bootstrap.", file=sys.stderr)
+                return
+
+            print("[action] Please solve the 'I am human' check in the visible window.", file=sys.stderr)
+            solved = _await_challenge_resolution(page)
+
+            if solved:
+                print("[info] Bootstrap solved; cookies persisted.", file=sys.stderr)
+            else:
+                print("[warn] Bootstrap did not complete within timeout.", file=sys.stderr)
+
+            _close_context(ctx)
+    except Exception as e:
+        print(f"[warn] Human bootstrap failed: {e}", file=sys.stderr)
+
 # =========================
 # Main loop
 # =========================
@@ -798,6 +860,8 @@ def safe_main():
         return
 
     label = "restockwatch"
+        # Try a one-time human bootstrap if requested
+    _human_bootstrap_once()
 
     # Ensure label exists (422 if already exists is fine)
     _ = gh_call("POST", f"/repos/{repo}/labels", token,
