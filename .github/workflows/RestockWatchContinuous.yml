@@ -79,7 +79,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "${env:PLAYWRIGHT_BROWSERS_PATH}" | Out-Null
           & "${env:PYPATH}" -m playwright install chromium
 
-      - name: Continuous loop (60s)
+      - name: Loop every 60s (headed bootstrap)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -87,15 +87,20 @@ jobs:
           PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          PYPATH: C:\Program Files\Python311\python.exe
+          PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
+          PC_USE_PERSISTENT: "1"
+          PC_USER_DATA_DIR:  E:\actions-runner\pw-profile
+          PC_STORAGE_STATE_PATH: E:\actions-runner\pw-profile\pc_state.json
+          PC_HEADED: "1"
+          DEBUG_PC_DUMP: "1"
+          PC_REQUIRE_HUMAN: "true"     # triggers the on-screen bootstrap
+          PC_CHALLENGE_TIMEOUT_S: "180"
+          PW_CHANNEL: "msedge"         # use Edge’s installed channel
+          PC_BLOCK_CHALLENGE_JS: "0"   # do NOT block challenge during bootstrap
         run: |
-          # NOTE: For the headed window to actually appear,
-          # run the self-hosted runner in an interactive user session (NOT as a Windows service).
-          while ($true) {
+         while ($true) {
             Write-Host "=== $(Get-Date) === bootstrap=$env:PC_REQUIRE_HUMAN channel=$env:PW_CHANNEL"
             & "${env:PYPATH}" watcher.py
             Start-Sleep -Seconds 60
-          }
-
-            & "${env:PYPATH}" watcher.py
-            Start-Sleep -Seconds 60
-          }
+            }
