@@ -1,7 +1,12 @@
 name: Restock Watch (continuous)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "Open headed browser and wait for human to pass Imperva (one-time)"
+        required: false
+        default: "false"   # set to "true" when you want the window to pop up
 
 permissions:
   contents: read
@@ -16,16 +21,38 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 4320
 
-    # Use Windows PowerShell for all steps in this job
     defaults:
       run:
         shell: powershell
 
     env:
-      # Update this if your Python lives elsewhere
+      # Python path on runner
       PYPATH: C:\Program Files\Python311\python.exe
-      # Persist browsers between runs (optional but nice for speed)
+
+      # Persist Playwright browser binaries (optional)
       PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
+
+      # Persistent user profile/state for Imperva cookies
+      PC_USE_PERSISTENT: "1"
+      PC_USER_DATA_DIR: E:\actions-runner\pw-profile
+      PC_STORAGE_STATE_PATH: E:\actions-runner\pw-profile\pc_state.json
+
+      # Headed + debug artifacts so you can see what's happening
+      PC_HEADED: "1"
+      DEBUG_PC_DUMP: "1"
+
+      # If true (via workflow input), show a window and wait for you to solve once
+      PC_REQUIRE_HUMAN: ${{ github.event.inputs.bootstrap }}
+
+      # Allow enough time for the hCaptcha solve during bootstrap
+      PC_CHALLENGE_TIMEOUT_S: "180"
+
+      # Use a *real* installed browser channel for higher trust. Change to "chrome" if you prefer.
+      PW_CHANNEL: msedge
+
+      # After you’ve solved once, you can set this to "1" to block the noisy challenge scripts.
+      # While bootstrapping we keep it off so the page can render the checkbox.
+      PC_BLOCK_CHALLENGE_JS: ${{ github.event.inputs.bootstrap == 'true' && '0' || '1' }}
 
     steps:
       - name: Checkout repo
@@ -43,15 +70,16 @@ jobs:
         run: |
           & "${env:PYPATH}" -m pip install --upgrade pip
           & "${env:PYPATH}" -m pip install -r requirements.txt
-          # Playwright Python package
           & "${env:PYPATH}" -m pip install playwright
 
-      - name: Install Playwright browsers (Chromium)
+      # If you rely on Playwright-managed Chromium, keep this.
+      # When using a real channel (Edge/Chrome), this step is harmless.
+      - name: Install Playwright browsers
         run: |
           New-Item -ItemType Directory -Force -Path "${env:PLAYWRIGHT_BROWSERS_PATH}" | Out-Null
           & "${env:PYPATH}" -m playwright install chromium
 
-      - name: Loop every 60s
+      - name: Continuous loop (60s)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -59,18 +87,15 @@ jobs:
           PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          PYPATH: C:\Program Files\Python311\python.exe
-          PLAYWRIGHT_BROWSERS_PATH: E:\actions-runner\pw-browsers
-          PC_HEADED: "1"
-          DEBUG_PC_DUMP: "1"
-          PC_BLOCK_CHALLENGE_JS: "0"
-          PC_USE_PERSISTENT: "1"
-          PC_USER_DATA_DIR: E:\actions-runner\pw-profile
-          PC_CHALLENGE_TIMEOUT_S: "180"
-          PC_STORAGE_STATE_PATH: E:\actions-runner\pw-profile\pc_state.json
         run: |
+          # NOTE: For the headed window to actually appear,
+          # run the self-hosted runner in an interactive user session (NOT as a Windows service).
           while ($true) {
-            Write-Host "=== $(Get-Date) ==="
+            Write-Host "=== $(Get-Date) === bootstrap=$env:PC_REQUIRE_HUMAN channel=$env:PW_CHANNEL"
+            & "${env:PYPATH}" watcher.py
+            Start-Sleep -Seconds 60
+          }
+
             & "${env:PYPATH}" watcher.py
             Start-Sleep -Seconds 60
           }
