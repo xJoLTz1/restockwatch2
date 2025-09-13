@@ -104,15 +104,15 @@ def load_config(path: str) -> Config:
 
 def extract_pc_product_links(html: str, max_links: int = 50) -> List[str]:
     """
-    Scrape Pokémon Center product links from a category page.
+    Scrape Pokémon Center product links from a category page (raw HTML).
     Handles href, data-pdp-url, absolute URLs, and JSON-embedded strings.
     """
     patterns = [
-        r'href=[\'"](/product/[^\'"]+)[\'"]',                  # <a href="/product/...">
-        r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',          # data-pdp-url="/product/..."
-        r'https?://www\.pokemoncenter\.com(/product/[^\'"]+)', # absolute URLs
-        r'"pdpUrl"\s*:\s*"\s*(/product/[^"]+)"',               # JSON: "pdpUrl": "/product/..."
-        r'"url"\s*:\s*"\s*(/product/[^"]+)"',                  # JSON: "url": "/product/..."
+        r'href=[\'"](/product/[^\'"]+)[\'"]',
+        r'data-pdp-url=[\'"](/product/[^\'"]+)[\'"]',
+        r'https?://www\.pokemoncenter\.com(/product/[^\'"]+)',
+        r'"pdpUrl"\s*:\s*"\s*(/product/[^"]+)"',
+        r'"url"\s*:\s*"\s*(/product/[^"]+)"',
     ]
 
     found: List[str] = []
@@ -141,7 +141,7 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             elapsed_ms = int((time.time() - start) * 1000)
             return r.text, r.status_code, elapsed_ms
         except Exception as e:
-            elapsed_ms = int((time.time() - start) * 1000)
+            _ = int((time.time() - start) * 1000)
             print(f"[warn] fetch attempt {attempt+1}/{retries+1} failed for {url}: {e}", file=sys.stderr)
             time.sleep(1.0)
     return None, None, None
@@ -162,7 +162,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent=PC_REAL_UA,  # force real UA for PC
+                user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
                 locale="en-US",
                 timezone_id="America/New_York",
@@ -173,11 +173,11 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
-            # reduce fingerprint (very mild)
             context.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
             page = context.new_page()
             main_response = None
+
             def _resp(r):
                 nonlocal main_response
                 if r.url.split("#")[0] == url.split("#")[0] and main_response is None:
@@ -187,11 +187,13 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
             # Try to accept cookie banners (best-effort, ignore errors)
-            for sel in ['button:has-text("Accept All")',
-                        'button:has-text("Accept all")',
-                        'button:has-text("Accept Cookies")',
-                        '[data-testid="cookie-accept-all"]',
-                        '[id*="onetrust-accept"]']:
+            for sel in [
+                'button:has-text("Accept All")',
+                'button:has-text("Accept all")',
+                'button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]',
+                '[id*="onetrust-accept"]',
+            ]:
                 try:
                     if page.is_visible(sel, timeout=500):
                         page.click(sel, timeout=500)
@@ -205,12 +207,14 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             except Exception:
                 pass
 
-            # Wait for product grid/link hints if available; otherwise small idle
+            # Wait for product/link hints if available; otherwise small idle
             waited = False
-            for sel in ['a[href^="/product/"]',
-                        '[data-pdp-url]',
-                        '[data-automation-id="product"]',
-                        'script[type="application/ld+json"]']:
+            for sel in [
+                'a[href^="/product/"]',
+                '[data-pdp-url]',
+                '[data-automation-id="product"]',
+                'script[type="application/ld+json"]',
+            ]:
                 try:
                     page.wait_for_selector(sel, timeout=3000)
                     waited = True
@@ -241,7 +245,6 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
     if is_pc:
         html, status, elapsed_ms = fetch_pc_rendered(url, ua=ua, timeout_seconds=timeout_seconds)
         source = "rendered"
-        # If Playwright fails, fall back once to raw so we still log something
         if html is None:
             html, status, elapsed_ms = fetch_html_with_retries(
                 url, timeout=timeout_seconds, ua=ua, retries=2
@@ -253,6 +256,76 @@ def fetch_pc_or_raw(url: str, ua: str, timeout_seconds: int):
         )
         source = "raw"
     return html, status, elapsed_ms, source
+
+def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
+    """
+    Re-render a category URL and pull product links from the live DOM
+    (avoids brittle regex when PC injects links client-side).
+    """
+    from playwright.sync_api import sync_playwright
+
+    links: List[str] = []
+    base = "https://www.pokemoncenter.com"
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=PC_REAL_UA,
+                viewport={'width': 1366, 'height': 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+                java_script_enabled=True,
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+
+            # cookie accept best-effort
+            for sel in [
+                'button:has-text("Accept All")',
+                'button:has-text("Accept all")',
+                'button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]',
+                '[id*="onetrust-accept"]',
+            ]:
+                try:
+                    if page.is_visible(sel, timeout=500):
+                        page.click(sel, timeout=500)
+                        break
+                except Exception:
+                    pass
+
+            # Let products load
+            try:
+                page.mouse.wheel(0, 1200)
+            except Exception:
+                pass
+            try:
+                page.wait_for_selector('a[href^="/product/"]', timeout=3500)
+            except Exception:
+                page.wait_for_timeout(2000)
+
+            hrefs = page.eval_on_selector_all(
+                'a[href^="/product/"]', 'els => els.map(e => e.getAttribute("href"))'
+            ) or []
+
+            # dedupe & normalize
+            seen = set()
+            for h in hrefs:
+                if not h:
+                    continue
+                if not h.startswith("/product/"):
+                    continue
+                full = (base + h.split("?")[0]).strip()
+                if full not in seen:
+                    seen.add(full)
+                    links.append(full)
+
+            context.close()
+            browser.close()
+    except Exception as e:
+        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
+
+    return links
 
 # =========================
 # GitHub helpers
@@ -295,72 +368,6 @@ def create_issue(repo: str, token: str, title: str, body: str, labels: List[str]
 
 def close_issue(repo: str, token: str, issue_number: int):
     gh_call("PATCH", f"/repos/{repo}/issues/{issue_number}", token, {"state": "closed"})
-
-def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 20) -> List[str]:
-    """
-    Re-render a category URL and pull product links from the live DOM
-    (avoids brittle regex when PC injects links client-side).
-    """
-    from playwright.sync_api import sync_playwright
-    import time as _time
-
-    links: List[str] = []
-    base = "https://www.pokemoncenter.com"
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=PC_REAL_UA,
-                viewport={'width': 1366, 'height': 900},
-                locale="en-US",
-                timezone_id="America/New_York",
-                java_script_enabled=True,
-            )
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
-
-            # cookie accept best-effort
-            for sel in ['button:has-text("Accept All")',
-                        'button:has-text("Accept all")',
-                        'button:has-text("Accept Cookies")',
-                        '[data-testid="cookie-accept-all"]',
-                        '[id*="onetrust-accept"]']:
-                try:
-                    if page.is_visible(sel, timeout=500):
-                        page.click(sel, timeout=500)
-                        break
-                except Exception:
-                    pass
-
-            # Let products load
-            page.mouse.wheel(0, 1200)
-            try:
-                page.wait_for_selector('a[href^="/product/"]', timeout=3500)
-            except Exception:
-                page.wait_for_timeout(2000)
-
-            hrefs = page.eval_on_selector_all(
-                'a[href^="/product/"]', 'els => els.map(e => e.getAttribute("href"))'
-            ) or []
-
-            # dedupe & normalize
-            seen = set()
-            for h in hrefs:
-                if not h:
-                    continue
-                if not h.startswith("/product/"):
-                    continue
-                full = (base + h.split("?")[0]).strip()
-                if full not in seen:
-                    seen.add(full)
-                    links.append(full)
-
-            context.close()
-            browser.close()
-    except Exception as e:
-        print(f"[warn] DOM link extraction failed for {url}: {e}", file=sys.stderr)
-
-    return links
 
 # =========================
 # Stock detection
@@ -471,14 +478,18 @@ def safe_main():
                 print(f"[warn] Could not fetch category {t.name}; skipping.", file=sys.stderr)
                 continue
 
-            print(f"[debug] {t.name} [category]: fetched {len(cat_html)} bytes in {cat_elapsed} ms "
-                  f"(status={cat_status}, source={cat_source}) from {t.url}")
+            print(
+                f"[debug] {t.name} [category]: fetched {len(cat_html)} bytes in {cat_elapsed} ms "
+                f"(status={cat_status}, source={cat_source}) from {t.url}"
+            )
 
             # Extract product links from the category page
-# Prefer live DOM extraction; if it returns none, fall back to regex on HTML
-        product_urls = extract_pc_links_from_dom_with_playwright(t.url, timeout_seconds=cfg.timeout_seconds)
-        if not product_urls:
-        product_urls = extract_pc_product_links(cat_html, max_links=30)
+            # Prefer live DOM extraction; if it returns none, fall back to regex on HTML
+            product_urls = extract_pc_links_from_dom_with_playwright(
+                t.url, timeout_seconds=cfg.timeout_seconds
+            )
+            if not product_urls:
+                product_urls = extract_pc_product_links(cat_html, max_links=30)
 
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
@@ -502,8 +513,10 @@ def safe_main():
                 if p_html is None:
                     continue
                 st = detect_stock(p_html, t)
-                print(f"[debug] {t.name} product: detect_stock -> {st} "
-                      f"(len={len(p_html)}, ms={p_elapsed}, source={p_source}) {purl}")
+                print(
+                    f"[debug] {t.name} product: detect_stock -> {st} "
+                    f"(len={len(p_html)}, ms={p_elapsed}, source={p_source}) {purl}"
+                )
                 if st is True:
                     in_stock_urls.append(purl)
 
@@ -546,11 +559,13 @@ def safe_main():
             print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
             continue
 
-        print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms "
-              f"(status={status}, source={source}) from {t.url}")
+        print(
+            f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms "
+            f"(status={status}, source={source}) from {t.url}"
+        )
 
         # Traffic spike heuristics
-        is_high_status  = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
+        is_high_status = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
         is_high_latency = (elapsed_ms is not None and elapsed_ms > TRAFFIC_LATENCY_MS)
 
         if is_high_status or is_high_latency:
@@ -605,3 +620,4 @@ if __name__ == "__main__":
         safe_main()
     except Exception as e:
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
+
