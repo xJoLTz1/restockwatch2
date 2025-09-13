@@ -123,17 +123,29 @@ def _build_context(pw):
 def _wire_challenge_blocking(page):
     if not PC_BLOCK_CHALLENGE_JS:
         return
-    # Abort Imperva/Incapsula “challenge” script loads that often flip us into 403
-    # We still allow HTML/JSON/XHR for real content.
+
+    # Block Imperva/Incapsula challenge JS; allow everything else.
     challenge_pat = re.compile(
         r"/(vice-come-[A-Za-z0-9-]+|GEDIE-OF-MACBETH-[A-Za-z0-9-]+)\b", re.I
     )
-    page.route(
-        "**/*",
-        lambda route: route.abort()
-        if challenge_pat.search(route.request().url)
-        else route.continue_()
-    )
+
+    def _route_handler(route):
+        try:
+            req = route.request  # <-- property, not a function
+            url = getattr(req, "url", "")
+            if challenge_pat.search(url or ""):
+                print(f"[debug] blocking challenge script: {url}", file=sys.stderr)
+                return route.abort()
+            return route.continue_()
+        except Exception as e:
+            # Never let routing crash the page; let it through on errors.
+            print(f"[warn] route handler error: {e}", file=sys.stderr)
+            try:
+                return route.continue_()
+            except Exception:
+                pass
+
+    page.route("**/*", _route_handler)
 
 # --- Traffic/latency heuristics ----------------------------------------------
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
