@@ -26,7 +26,19 @@ PC_REAL_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
-PC_HEADED = os.environ.get("PC_HEADED", "0") == "1"  # set to 1 to run non-headless on self-hosted
+# near the top of watcher.py, after other constants
+PC_HEADED = os.environ.get("PC_HEADED", "").strip() == "1"
+
+def _launch_browser(pw):
+    # Single place to control headless/headed + common args
+    return pw.chromium.launch(
+        headless=not PC_HEADED,  # <-- respects PC_HEADED
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-gpu",
+        ],
+    )
 
 # --- Traffic/latency heuristics ---
 TRAFFIC_LATENCY_MS = 2500   # treat >2.5s as “high traffic”
