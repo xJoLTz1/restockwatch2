@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 import requests
 import yaml
 
+# Make Windows console happy for UTF-8 logs
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -175,9 +176,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
             page.on("response", _resp)
 
             page.goto(url, wait_until="networkidle", timeout=timeout_seconds * 1000)
-
-            # A small wait helps late async widgets finish
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(800)  # small wait for late async widgets
 
             html = page.content()
             status = main_response.status if main_response else 200
@@ -187,6 +186,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     except Exception as e:
         print(f"[warn] Playwright fetch failed for {url}: {e}", file=sys.stderr)
         return None, None, None
+
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
     return html, status, elapsed_ms
 
@@ -333,7 +333,7 @@ def safe_main():
 
         # --- Category expansion for Pokémon Center ---
         if (t.expand or "").lower() == "pc_category":
-            # Fetch category page once
+            # Fetch category page once (simple GET; PC often hides products to bots, but we try)
             cat_html, cat_status, cat_elapsed = fetch_html_with_retries(
                 t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
             )
@@ -388,7 +388,7 @@ def safe_main():
                     open_issues = list_open_issues(repo, token, label=label)  # refresh to avoid dupes
                     print(f"[alert] opened aggregate IN-STOCK issue for {t.name}")
                 else:
-                    # Optional: PATCH the body to update the list (skipped to avoid noise)
+                    # Optional: PATCH body to update list (skipped to avoid noise)
                     print(f"[info] aggregate IN-STOCK issue already open for {t.name}")
             else:
                 # Nothing buyable right now — close aggregate if it exists
@@ -401,25 +401,22 @@ def safe_main():
             continue  # done with this category target
         # --- END category path ---
 
-    # --- END category path ---
+        # Decide fetch method for single URLs
+        is_pc = "pokemoncenter.com" in (t.url or "")
+        if is_pc:
+            html, status, elapsed_ms = fetch_pc_rendered(
+                t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
+            )
+        else:
+            html, status, elapsed_ms = fetch_html_with_retries(
+                t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
+            )
 
-    # Decide fetch method
-    is_pc = "pokemoncenter.com" in (t.url or "")
-    if is_pc or (t.expand or "").lower() == "pc_category":
-        html, status, elapsed_ms = fetch_pc_rendered(
-            t.url, ua=cfg.user_agent, timeout_seconds=cfg.timeout_seconds
-        )
-    else:
-        html, status, elapsed_ms = fetch_html_with_retries(
-            t.url, timeout=cfg.timeout_seconds, ua=cfg.user_agent, retries=2
-        )
+        if html is None:
+            print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
+            continue
 
-    if html is None:
-        print(f"[warn] Could not fetch {t.name}; skipping.", file=sys.stderr)
-        continue
-
-    print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
-    ...
+        print(f"[debug] {t.name}: fetched {len(html)} bytes in {elapsed_ms} ms (status={status}) from {t.url}")
 
         # Traffic spike heuristics
         is_high_status  = (status in HIGH_TRAFFIC_STATUSES) if status is not None else False
@@ -476,4 +473,3 @@ if __name__ == "__main__":
         safe_main()
     except Exception as e:
         print(f"[fatal] Uncaught error: {e}", file=sys.stderr)
-
