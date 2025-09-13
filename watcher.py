@@ -9,9 +9,6 @@ from typing import List, Optional, Dict, Any
 import requests
 import yaml
 
-env:
-  DEBUG_PC_DUMP: "1"
-
 # Make Windows console happy for UTF-8 logs
 try:
     sys.stdout.reconfigure(encoding="utf-8")
