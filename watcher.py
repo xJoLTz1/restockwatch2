@@ -139,6 +139,57 @@ def fetch_html_with_retries(url: str, timeout: int, ua: str, retries: int = 2):
             time.sleep(1.0)
     return None, None, None
 
+# ---- JS-rendered fetch for Pokémon Center pages (Playwright) ----
+def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
+    """
+    Use Playwright Chromium to render Pokemon Center pages so the real DOM loads.
+    Returns (html, status_code, elapsed_ms) or (None, None, None) on failure.
+    """
+    from playwright.sync_api import sync_playwright
+    import time as _time
+
+    t0 = _time.perf_counter()
+    html = None
+    status = None
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=ua,
+                viewport={'width': 1366, 'height': 900},
+                java_script_enabled=True,
+                extra_http_headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Upgrade-Insecure-Requests": "1",
+                },
+            )
+            page = context.new_page()
+
+            # Track main response to get the status
+            main_response = None
+            def _resp(r):
+                nonlocal main_response
+                if r.url == url and main_response is None:
+                    main_response = r
+            page.on("response", _resp)
+
+            page.goto(url, wait_until="networkidle", timeout=timeout_seconds * 1000)
+
+            # A small wait helps late async widgets finish
+            page.wait_for_timeout(800)
+
+            html = page.content()
+            status = main_response.status if main_response else 200
+
+            context.close()
+            browser.close()
+    except Exception as e:
+        print(f"[warn] Playwright fetch failed for {url}: {e}", file=sys.stderr)
+        return None, None, None
+    elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+    return html, status, elapsed_ms
+
 # =========================
 # GitHub helpers
 # =========================
