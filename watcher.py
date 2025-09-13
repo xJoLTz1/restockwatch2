@@ -12,8 +12,13 @@ from typing import List, Optional, Dict, Any
 import requests
 import yaml
 
-def _env_bool(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name, default) or "").strip().lower() in ("1","true","yes","on")
+# ---------- env helpers ----------
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = os.environ.get(name, None)
+    if v is None:
+        return default
+    v = str(v).strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
 
 # Make Windows console happy for UTF-8 logs
 try:
@@ -32,15 +37,22 @@ PC_REAL_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
+
 PC_HEADED = _env_bool("PC_HEADED")
-PC_BLOCK_CHALLENGE_JS = _env_bool("PC_BLOCK_CHALLENGE_JS", "1")
+PC_BLOCK_CHALLENGE_JS = _env_bool("PC_BLOCK_CHALLENGE_JS", True)
 PC_USE_PERSISTENT = _env_bool("PC_USE_PERSISTENT")
 PC_REQUIRE_HUMAN = _env_bool("PC_REQUIRE_HUMAN")
+
+# Optional: paths/cookies
 PC_STORAGE_STATE = os.environ.get("PC_STORAGE_STATE", "").strip()
 PC_COOKIES_JSON = os.environ.get("PC_COOKIES_JSON", "").strip()
+
+# Imperva / session handling (our own persistence)
 PC_USER_DATA_DIR = os.environ.get("PC_USER_DATA_DIR", "pc_debug/pw-profile")
 PC_CHALLENGE_TIMEOUT_S = int(os.environ.get("PC_CHALLENGE_TIMEOUT_S", "180"))
 STORAGE_STATE_PATH = os.environ.get("PC_STORAGE_STATE_PATH", "pc_debug/pc_state.json")
+
+# Extra “real-ish” headers inc. UA-CH (some botwalls check these)
 _PC_EXTRA_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -324,6 +336,23 @@ def _looks_like_incapsula_challenge(page_html: str) -> bool:
     if "powered by imperva" in low: return True
     return False
 
+def _challenge_seen_in_responses(responses: list) -> bool:
+    try:
+        for r in responses or []:
+            u = (getattr(r, "url", "") or "").lower()
+            ct = ((r.headers or {}).get("content-type", "") or "").lower()
+            if "_incapsula_resource" in u:
+                return True
+            if "vice-come-" in u or "gedie-of-macbeth" in u:
+                return True
+            if "hcaptcha" in u:
+                return True
+            if "hcaptcha" in ct:
+                return True
+    except Exception:
+        pass
+    return False
+
 def _await_challenge_resolution(page) -> bool:
     """
     If the Imperva page is shown, ask the human to solve it (only in headed mode).
@@ -378,7 +407,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
     t0 = time.perf_counter()
     html = None
     status = None
-    responses = []
+    responses: List[Any] = []
 
     try:
         with sync_playwright() as pw:
@@ -410,10 +439,13 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
 
             # If we’re staring at the Imperva page, let the human solve it once
             html_probe = page.content()
-            if _looks_like_incapsula_challenge(html_probe):
+            if _looks_like_incapsula_challenge(html_probe) or _challenge_seen_in_responses(responses):
                 if _await_challenge_resolution(page):
                     responses.clear()
                     page.reload(wait_until="domcontentloaded")
+                else:
+                    # continue; small html will be dumped
+                    pass
 
             # Progressive scroll to fire lazy feeds
             end = time.time() + 7
@@ -558,8 +590,6 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
                 page.on("response", on_response)
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
 
-                # --- Log 403s early
-                # (Responses captured in handler above—this log will appear on the next loop if any 403s hit.)
                 # Cookie banner (best-effort)
                 for sel in [
                     'button:has-text("Accept All")',
@@ -792,6 +822,10 @@ def detect_stock(html: str, t: Target) -> Optional[bool]:
         return False
     return None
 
+# =========================
+# Human bootstrap (headed)
+# =========================
+
 def _human_bootstrap_once():
     """
     If PC_REQUIRE_HUMAN=1 and we detect Imperva on the homepage,
@@ -806,7 +840,6 @@ def _human_bootstrap_once():
         return
 
     print("[action] Human bootstrap: opening a visible browser window for Imperva solve...", file=sys.stderr)
-    from playwright.sync_api import sync_playwright
 
     try:
         with sync_playwright() as pw:
@@ -818,13 +851,27 @@ def _human_bootstrap_once():
             except Exception:
                 pass
 
+            responses: List[Any] = []
+            page.on("response", lambda r: responses.append(r))
             page.goto(PC_BOOT_URL, wait_until="domcontentloaded", timeout=30000)
 
             html = page.content()
-            if not _looks_like_incapsula_challenge(html):
-                # Already clear; persist and bail
-                try: ctx.storage_state(path=STORAGE_STATE_PATH)
-                except Exception: pass
+            challenge = _looks_like_incapsula_challenge(html) or _challenge_seen_in_responses(responses)
+
+            if not challenge:
+                # Give it a moment to see if Imperva injects after first paint
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+                html = page.content()
+                challenge = _looks_like_incapsula_challenge(html) or _challenge_seen_in_responses(responses)
+
+            if not challenge:
+                try:
+                    ctx.storage_state(path=STORAGE_STATE_PATH)
+                except Exception:
+                    pass
                 _close_context(ctx)
                 print("[info] No challenge detected on bootstrap.", file=sys.stderr)
                 return
@@ -855,6 +902,7 @@ def safe_main():
         return
 
     label = "restockwatch"
+
     # Try a one-time human bootstrap if requested
     _human_bootstrap_once()
 
