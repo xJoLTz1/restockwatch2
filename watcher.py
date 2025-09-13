@@ -213,8 +213,10 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
                     pass
 
             # Nudge + longer stabilization
-            try: page.mouse.wheel(0, 1200)
-            except Exception: pass
+            try:
+                page.mouse.wheel(0, 1200)
+            except Exception:
+                pass
             try:
                 page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
@@ -279,7 +281,7 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled","--no-sandbox","--disable-gpu"],
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
             )
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
@@ -294,8 +296,8 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
 
             # Accept cookies (best-effort)
             for sel in [
-                'button:has-text("Accept All")','button:has-text("Accept Cookies")',
-                '[data-testid="cookie-accept-all"]','[id*="onetrust-accept"]'
+                'button:has-text("Accept All")', 'button:has-text("Accept Cookies")',
+                '[data-testid="cookie-accept-all"]', '[id*="onetrust-accept"]'
             ]:
                 try:
                     if page.is_visible(sel, timeout=500):
@@ -305,10 +307,14 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                     pass
 
             # Stabilize
-            try: page.mouse.wheel(0, 1200)
-            except Exception: pass
-            try: page.wait_for_load_state("networkidle", timeout=6000)
-            except Exception: page.wait_for_timeout(2000)
+            try:
+                page.mouse.wheel(0, 1200)
+            except Exception:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=6000)
+            except Exception:
+                page.wait_for_timeout(2000)
 
             # --- (1) JSON-LD list
             try:
@@ -352,7 +358,6 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
 
             # --- (3) Quick View probing (limited to first ~6 tiles)
             if not links:
-                # Find tiles with a Quick View button
                 tiles = page.query_selector_all('button:has-text("Quick View"), [data-testid="quick-view"]')
                 tiles = tiles[:6]  # keep it light
                 for btn in tiles:
@@ -377,7 +382,6 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
                     finally:
                         # close the modal
                         try:
-                            # common close patterns
                             for sel in ['button:has-text("Close")', '[aria-label="Close"]', 'button[title="Close"]']:
                                 if page.is_visible(sel, timeout=300):
                                     page.click(sel, timeout=300)
@@ -547,14 +551,14 @@ def safe_main():
                 f"[debug] {t.name} [category]: fetched {len(cat_html)} bytes in {cat_elapsed} ms "
                 f"(status={cat_status}, source={cat_source}) from {t.url}"
             )
-            
+
             # Extract product links from the category page
-        product_urls = extract_pc_links_from_dom_with_playwright(
-        t.url, timeout_seconds=cfg.timeout_seconds
-    )   
-        if not product_urls:
-    # Fallback to regex on the rendered HTML we already downloaded
-    product_urls = extract_pc_product_links(cat_html, max_links=30)
+            product_urls = extract_pc_links_from_dom_with_playwright(
+                t.url, timeout_seconds=cfg.timeout_seconds
+            )
+            if not product_urls:
+                # Fallback to regex on the rendered HTML we already downloaded
+                product_urls = extract_pc_product_links(cat_html, max_links=30)
 
             if not product_urls:
                 print(f"[info] No product links found in category: {t.name}")
