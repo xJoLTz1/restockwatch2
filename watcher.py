@@ -238,14 +238,7 @@ def fetch_pc_rendered(url: str, ua: str, timeout_seconds: int = 20):
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=not PC_HEADED,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-gpu",
-                ],
-            )
+            browser = _launch_browser(pw)
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
@@ -383,10 +376,7 @@ def collect_pc_product_links_with_network(url: str, timeout_seconds: int = 20, m
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=not PC_HEADED,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
-            )
+            browser = _launch_browser(pw)
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
@@ -488,10 +478,7 @@ def extract_pc_links_from_dom_with_playwright(url: str, timeout_seconds: int = 2
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=not PC_HEADED,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-gpu"],
-            )
+            browser = _launch_browser(pw)
             context = browser.new_context(
                 user_agent=PC_REAL_UA,
                 viewport={'width': 1366, 'height': 900},
